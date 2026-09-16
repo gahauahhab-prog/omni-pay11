@@ -29,7 +29,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Badge } from '../../components/ui/Badge';
 import { Table, Column } from '../../components/ui/Table';
 import { formatCurrency, formatDate, copyToClipboard, buildPaymentLinkUrl } from '../../lib/utils';
-import { exportToExcelFile, exportToCsvFile } from '../../lib/excelExport';
+import { exportToExcelFile } from '../../lib/excelExport';
 
 export const PaymentLinksPage: React.FC = () => {
   const { user } = useAuth();
@@ -156,9 +156,13 @@ export const PaymentLinksPage: React.FC = () => {
 
   const handleCreateLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    const parsedAmount = parseFloat(amount);
-    if (!clientId || isNaN(parsedAmount) || parsedAmount <= 0) {
-      error('Invalid Input', 'Please select a client and specify a valid amount.');
+    const parsedAmount = amount.trim() ? parseFloat(amount) : 0;
+    if (!clientId) {
+      error('Invalid Input', 'Please select a client.');
+      return;
+    }
+    if (amount.trim() && (isNaN(parsedAmount) || parsedAmount < 0)) {
+      error('Invalid Amount', 'Please specify a valid amount or leave blank for open amount.');
       return;
     }
 
@@ -257,44 +261,6 @@ export const PaymentLinksPage: React.FC = () => {
     }
   };
 
-  const handleExportCsv = () => {
-    if (filteredLinks.length === 0) {
-      error('Export Failed', 'No payment links found to export.');
-      return;
-    }
-
-    const headers = [
-      'Link ID',
-      'Client Name',
-      'Amount',
-      'Status',
-      'Receiving UPI',
-      'Remarks',
-      'UTR Number',
-      'Created Date',
-      'Direct URL',
-    ];
-
-    const rows = filteredLinks.map((l) => [
-      l.id,
-      l.client_name,
-      l.amount,
-      l.status,
-      l.upi_id,
-      l.remarks || '',
-      l.utr_number || '',
-      formatDate(l.created_at),
-      buildPaymentLinkUrl(l),
-    ]);
-
-    const ok = exportToCsvFile(headers, rows, `payment_links_${Date.now()}`);
-    if (ok) {
-      success('Export Complete', `Exported ${filteredLinks.length} payment links to CSV.`);
-    } else {
-      error('Export Failed', 'Could not generate CSV file.');
-    }
-  };
-
   const confirmDeleteLink = async () => {
     if (!deletingLink) return;
     await db.deletePaymentLink(deletingLink.id, user?.full_name || 'Admin', user?.id || 'admin');
@@ -327,7 +293,13 @@ export const PaymentLinksPage: React.FC = () => {
       accessorKey: 'amount',
       sortable: true,
       render: (item) => (
-        <span className="font-bold text-sm text-slate-900">{formatCurrency(item.amount)}</span>
+        item.amount > 0 ? (
+          <span className="font-bold text-sm text-slate-900">{formatCurrency(item.amount)}</span>
+        ) : (
+          <span className="inline-flex items-center text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+            Open (ग्राहक द्वारा)
+          </span>
+        )
       ),
     },
     {
@@ -494,14 +466,6 @@ export const PaymentLinksPage: React.FC = () => {
           >
             Export Excel
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCsv}
-            leftIcon={<Download className="w-3.5 h-3.5" />}
-          >
-            Export CSV
-          </Button>
           <Button onClick={() => setIsModalOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
             Generate Payment Link
           </Button>
@@ -622,14 +586,14 @@ export const PaymentLinksPage: React.FC = () => {
           </div>
 
           <Input
-            label="Payment Amount (₹) *"
+            label="Payment Amount (₹) (Optional - खुला छोड़ सकते हैं)"
             type="number"
-            min={1}
+            min={0}
             step={1}
-            placeholder="e.g. 5000"
+            placeholder="Khali chhod sakte hain (e.g. 5000 ya blank)"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            required
+            helperText="Khali chhodne par customer checkout page par apni marzi se amount daal sakega."
             autoFocus
           />
 

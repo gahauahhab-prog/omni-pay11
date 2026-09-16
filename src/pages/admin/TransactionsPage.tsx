@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   ReceiptText,
   Search,
-  Download,
   Calendar,
   Filter,
   FileSpreadsheet,
@@ -17,7 +16,7 @@ import { Input } from '../../components/ui/Input';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { formatCurrency, formatDate } from '../../lib/utils';
-import { exportToExcelFile, exportToCsvFile } from '../../lib/excelExport';
+import { exportToExcelFile } from '../../lib/excelExport';
 import { useToast } from '../../context/ToastContext';
 
 export const TransactionsPage: React.FC = () => {
@@ -84,42 +83,6 @@ export const TransactionsPage: React.FC = () => {
       success('Export Complete', `Exported ${filteredTransactions.length} transactions to Excel (.xlsx).`);
     } else {
       error('Export Failed', 'Could not generate Excel spreadsheet.');
-    }
-  };
-
-  const handleExportCSV = () => {
-    if (filteredTransactions.length === 0) {
-      error('Export Failed', 'No transactions found to export.');
-      return;
-    }
-
-    const headers = [
-      'Date & Time',
-      'Client Name',
-      'Payment Method',
-      'Destination Account',
-      'Reference / UTR No',
-      'Amount',
-      'Status',
-      'Raw Timestamp',
-    ];
-
-    const rows = filteredTransactions.map((t) => [
-      formatDate(t.created_at),
-      t.client_name,
-      t.method,
-      t.destination_name,
-      t.reference_no,
-      t.amount,
-      t.status,
-      t.created_at,
-    ]);
-
-    const ok = exportToCsvFile(headers, rows, `transactions_${Date.now()}`);
-    if (ok) {
-      success('Export Complete', `Exported ${filteredTransactions.length} transactions to CSV.`);
-    } else {
-      error('Export Failed', 'Could not generate CSV file.');
     }
   };
 
@@ -229,14 +192,6 @@ export const TransactionsPage: React.FC = () => {
             leftIcon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />}
           >
             Export Excel
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCSV}
-            leftIcon={<Download className="w-3.5 h-3.5" />}
-          >
-            Export CSV
           </Button>
           {transactions.length > 0 && (
             <Button

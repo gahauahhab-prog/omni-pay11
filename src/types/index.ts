@@ -49,6 +49,8 @@ export interface Client {
   phone: string;
   password?: string;
   status: UserStatus;
+  last_login_ip?: string;
+  last_login_at?: string;
   created_at: string;
 }
 
@@ -78,6 +80,7 @@ export interface ActivityLog {
   user_role?: string;
   action: string;
   details: string;
+  ip_address?: string;
   created_at: string;
 }
 

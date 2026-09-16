@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Mail,
   Phone,
+  Globe,
 } from 'lucide-react';
 import { Client } from '../../types';
 import { db } from '../../services/db';
@@ -245,6 +246,27 @@ export const ClientsPage: React.FC = () => {
           <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           <span>{item.phone || '—'}</span>
         </div>
+      ),
+    },
+    {
+      header: 'Last Login (IP)',
+      accessorKey: 'last_login_at',
+      render: (item) => (
+        item.last_login_at ? (
+          <div className="space-y-0.5">
+            <span className="text-[11px] text-slate-700 font-medium block">
+              {formatDate(item.last_login_at)}
+            </span>
+            {item.last_login_ip && (
+              <span className="inline-flex items-center gap-1 font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                <Globe className="w-2.5 h-2.5 text-blue-500" />
+                {item.last_login_ip}
+              </span>
+            )}
+          </div>
+        ) : (
+          <span className="text-slate-400 text-xs">Never</span>
+        )
       ),
     },
     {

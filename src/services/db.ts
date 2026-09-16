@@ -361,7 +361,8 @@ class DatabaseService {
     action: string,
     details: string,
     userId: string = 'system',
-    userRole: string = 'admin'
+    userRole: string = 'admin',
+    ipAddress?: string
   ): Promise<ActivityLog> {
     const newLog: ActivityLog = {
       id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -370,12 +371,14 @@ class DatabaseService {
       user_role: userRole,
       action,
       details,
+      ip_address: ipAddress || '',
       created_at: new Date().toISOString(),
     };
 
     const logs = getStored<ActivityLog[]>(STORAGE_KEYS.ACTIVITY_LOGS, []);
     const updated = [newLog, ...logs];
     setStored(STORAGE_KEYS.ACTIVITY_LOGS, updated);
+    this.notifyChange('ACTIVITY_LOGS');
 
     if (isFirebaseConfigured() && firestoreDb) {
       setDoc(doc(firestoreDb, 'activity_logs', newLog.id), newLog).catch((err) =>
@@ -777,6 +780,26 @@ class DatabaseService {
     return saved;
   }
 
+  public async recordClientLogin(clientId: string, ipAddress: string): Promise<void> {
+    const clients = getStored<Client[]>(STORAGE_KEYS.CLIENTS, []);
+    const idx = clients.findIndex((c) => c.id === clientId || c.user_id === clientId);
+    if (idx !== -1) {
+      clients[idx] = {
+        ...clients[idx],
+        last_login_ip: ipAddress,
+        last_login_at: new Date().toISOString(),
+      };
+      setStored(STORAGE_KEYS.CLIENTS, clients);
+      this.notifyChange('CLIENTS');
+
+      if (isFirebaseConfigured() && firestoreDb) {
+        setDoc(doc(firestoreDb, 'clients', clients[idx].id), clients[idx], { merge: true }).catch((e) =>
+          console.warn('Firebase client login update error:', e)
+        );
+      }
+    }
+  }
+
   public async deleteClient(
     id: string,
     actorName: string = 'Admin',
@@ -975,28 +998,36 @@ class DatabaseService {
 
   public async submitPaymentProof(
     linkId: string,
-    data: { screenshot_url: string; utr_number?: string }
+    data: { screenshot_url?: string; utr_number?: string }
   ): Promise<PaymentLink | null> {
     const links = getStored<PaymentLink[]>(STORAGE_KEYS.PAYMENT_LINKS, []);
-    const index = links.findIndex((l) => l.id === linkId);
+    const cleanId = linkId.trim().toLowerCase().replace(/\/$/, '');
+    const index = links.findIndex((l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanId);
     if (index === -1) return null;
 
     links[index] = {
       ...links[index],
       status: 'Pending Confirmation',
-      screenshot_url: data.screenshot_url,
+      screenshot_url: data.screenshot_url || '',
       utr_number: data.utr_number || '',
       submitted_at: new Date().toISOString(),
     };
 
     setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
+    this.notifyChange('PAYMENT_LINKS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      setDoc(doc(firestoreDb, 'payment_links', links[index].id), links[index], { merge: true }).catch((err) =>
+        console.warn('Firebase link update error:', err)
+      );
+    }
 
     await this.logAction(
       links[index].client_name || 'Client',
-      'Payment Proof Submitted',
-      `Uploaded payment screenshot for ₹${links[index].amount.toLocaleString('en-IN')}${
-        data.utr_number ? ` (UTR: ${data.utr_number})` : ''
-      }. Awaiting admin confirmation.`,
+      'Payment Submitted',
+      `Client marked payment as completed for ₹${links[index].amount.toLocaleString('en-IN')}${
+        data.utr_number ? ` (Ref/UTR: ${data.utr_number})` : ''
+      }${data.screenshot_url ? ' with screenshot proof' : ' (direct confirmation)'}. Awaiting admin review.`,
       links[index].client_id || 'client'
     );
 

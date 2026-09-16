@@ -163,9 +163,9 @@ Branch: ${bank.branch || 'Main Branch'}`;
 
   const handleGenerateLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    const val = parseFloat(amount);
-    if (isNaN(val) || val <= 0) {
-      error('Invalid Amount', 'Please enter a valid amount.');
+    const val = amount.trim() ? parseFloat(amount) : 0;
+    if (amount.trim() && (isNaN(val) || val < 0)) {
+      error('Invalid Amount', 'Please enter a valid positive amount or leave empty.');
       return;
     }
 
@@ -718,13 +718,13 @@ Branch: ${bank.branch || 'Main Branch'}`;
           </div>
 
           <Input
-            label="Payment Amount (₹)"
+            label="Payment Amount (₹) (Optional - खुला छोड़ सकते हैं)"
             type="number"
-            min={1}
-            placeholder="e.g. 5000"
+            min={0}
+            placeholder="Khali chhod sakte hain (e.g. 5000 ya blank)"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            required
+            helperText="Khali chhodne par payer checkout page par apni marzi se amount daal sakega."
           />
 
           <Input

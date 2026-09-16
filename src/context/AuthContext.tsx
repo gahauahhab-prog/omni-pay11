@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Profile, Client, UserRole } from '../types';
 import { db } from '../services/db';
 import { INITIAL_SUPER_ADMIN } from '../services/seedData';
+import { fetchClientIp } from '../lib/ipUtils';
 
 export interface AuthUser {
   id: string;
@@ -86,12 +87,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(authUser);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
 
+      const adminIp = await fetchClientIp();
       await db.logAction(
         authUser.full_name,
         'Admin Login',
-        `User logged into administrative dashboard (${authUser.email})`,
+        `User logged into administrative dashboard (IP: ${adminIp}, ${authUser.email})`,
         authUser.id,
-        authUser.role
+        authUser.role,
+        adminIp
       );
 
       return { success: true };
@@ -133,12 +136,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(authUser);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authUser));
 
+      // Capture client IP and record login details
+      const clientIp = await fetchClientIp();
+      await db.recordClientLogin(matchedClient.id, clientIp);
+
       await db.logAction(
         authUser.full_name,
         'Client Login',
-        `Client logged into payment information portal (${authUser.email})`,
+        `Client logged into portal from IP: ${clientIp} (${authUser.email})`,
         authUser.id,
-        'client'
+        'client',
+        clientIp
       );
 
       return { success: true };
@@ -148,6 +156,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    if (user) {
+      db.logAction(
+        user.full_name,
+        user.role === 'client' ? 'Client Logout' : 'Admin Logout',
+        `${user.role === 'client' ? 'Client' : 'Admin'} logged out of portal session (${user.email})`,
+        user.id,
+        user.role
+      ).catch((err) => console.warn('Logout log error:', err));
+    }
     setUser(null);
     setOriginalAdminUser(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);

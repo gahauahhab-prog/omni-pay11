@@ -6,8 +6,8 @@ import {
   UserCheck,
   Trash2,
   FileSpreadsheet,
-  Download,
   AlertTriangle,
+  Globe,
 } from 'lucide-react';
 import { ActivityLog } from '../../types';
 import { db } from '../../services/db';
@@ -17,7 +17,7 @@ import { Input } from '../../components/ui/Input';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { formatDate } from '../../lib/utils';
-import { exportToExcelFile, exportToCsvFile } from '../../lib/excelExport';
+import { exportToExcelFile } from '../../lib/excelExport';
 import { useToast } from '../../context/ToastContext';
 
 export const ActivityLogsPage: React.FC = () => {
@@ -69,6 +69,7 @@ export const ActivityLogsPage: React.FC = () => {
       'User / Actor': log.user_name,
       'User Role': log.user_role || 'Admin',
       'Activity Details': log.details,
+      'IP Address': log.ip_address || 'N/A',
       'Date & Time': formatDate(log.created_at),
       'Raw Timestamp': log.created_at,
     }));
@@ -78,37 +79,6 @@ export const ActivityLogsPage: React.FC = () => {
       success('Export Complete', `Exported ${filteredLogs.length} logs to Excel (.xlsx).`);
     } else {
       error('Export Failed', 'Could not generate Excel spreadsheet.');
-    }
-  };
-
-  const handleExportCsv = () => {
-    if (filteredLogs.length === 0) {
-      error('Export Failed', 'No activity logs match the criteria to export.');
-      return;
-    }
-
-    const headers = [
-      'Action Taken',
-      'User / Actor',
-      'User Role',
-      'Activity Details',
-      'Date & Time',
-      'Raw Timestamp',
-    ];
-    const rows = filteredLogs.map((log) => [
-      log.action,
-      log.user_name,
-      log.user_role || 'Admin',
-      log.details,
-      formatDate(log.created_at),
-      log.created_at,
-    ]);
-
-    const ok = exportToCsvFile(headers, rows, `activity_logs_${Date.now()}`);
-    if (ok) {
-      success('Export Complete', `Exported ${filteredLogs.length} logs to CSV.`);
-    } else {
-      error('Export Failed', 'Could not generate CSV file.');
     }
   };
 
@@ -164,6 +134,20 @@ export const ActivityLogsPage: React.FC = () => {
       ),
     },
     {
+      header: 'IP Address',
+      accessorKey: 'ip_address',
+      render: (item) => (
+        item.ip_address ? (
+          <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-200">
+            <Globe className="w-3 h-3 text-blue-500" />
+            {item.ip_address}
+          </span>
+        ) : (
+          <span className="text-slate-400 text-xs">-</span>
+        )
+      ),
+    },
+    {
       header: 'Timestamp',
       accessorKey: 'created_at',
       sortable: true,
@@ -208,14 +192,6 @@ export const ActivityLogsPage: React.FC = () => {
             leftIcon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />}
           >
             Export Excel
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCsv}
-            leftIcon={<Download className="w-3.5 h-3.5" />}
-          >
-            Export CSV
           </Button>
           {logs.length > 0 && (
             <Button
