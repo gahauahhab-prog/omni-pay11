@@ -222,16 +222,18 @@ export const BankAccountsPage: React.FC = () => {
       ),
     },
     {
-      header: 'Bank Details',
-      accessorKey: 'bank_name',
+      header: 'Account Holder & Bank',
+      accessorKey: 'account_holder',
       sortable: true,
       render: (item) => (
         <div>
-          <div className="font-semibold text-slate-900 flex items-center gap-1.5">
-            <Building2 className="w-3.5 h-3.5 text-blue-600" />
-            <span>{item.bank_name}</span>
+          <div className="font-bold text-slate-900 text-sm">
+            {item.account_holder}
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">{item.account_holder}</p>
+          <div className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 mt-1">
+            <Building2 className="w-3 h-3 text-blue-600 shrink-0" />
+            <span className="font-semibold">{item.bank_name}</span>
+          </div>
         </div>
       ),
     },

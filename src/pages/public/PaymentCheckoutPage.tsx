@@ -712,11 +712,36 @@ export const PaymentCheckoutPage: React.FC = () => {
                       key={b.id}
                       className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-3"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-900">{b.bank_name}</span>
-                        <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded font-semibold border border-blue-200">
-                          IMPS / NEFT / RTGS
-                        </span>
+                      {/* Prominent Account Holder Header with Bank as Compact Badge */}
+                      <div className="flex items-start justify-between gap-2 pb-2.5 border-b border-slate-200">
+                        <div>
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
+                            Account Holder (Beneficiary Name)
+                          </span>
+                          <div className="text-base sm:text-lg font-bold text-slate-900 mt-0.5">
+                            {b.account_holder}
+                          </div>
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                              <Building2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                              {b.bank_name}
+                            </span>
+                            <span className="text-[11px] text-slate-500">
+                              ({b.branch || 'Main Branch'})
+                            </span>
+                            <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-medium">
+                              IMPS / NEFT / RTGS
+                            </span>
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleCopy(`holder_${b.id}`, b.account_holder, 'Beneficiary Name')}
+                        >
+                          {copiedKey === `holder_${b.id}` ? 'Copied' : 'Copy Name'}
+                        </Button>
                       </div>
 
                       <div className="space-y-2 text-xs">
@@ -756,13 +781,6 @@ export const PaymentCheckoutPage: React.FC = () => {
                           >
                             {copiedKey === `ifsc_${b.id}` ? 'Copied' : 'Copy'}
                           </Button>
-                        </div>
-
-                        <div className="pt-1">
-                          <span className="text-[10px] text-slate-400 uppercase font-semibold block">
-                            Beneficiary Name
-                          </span>
-                          <span className="font-semibold text-slate-800">{b.account_holder}</span>
                         </div>
                       </div>
                     </div>

@@ -256,8 +256,8 @@ Branch: ${bank.branch || 'Main Branch'}`;
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase tracking-wider text-[11px] font-semibold">
+                    <th className="py-3 px-4">Account Holder (Beneficiary)</th>
                     <th className="py-3 px-4">Bank & Branch</th>
-                    <th className="py-3 px-4">Beneficiary Name</th>
                     <th className="py-3 px-4">Account Number</th>
                     <th className="py-3 px-4">IFSC Code</th>
                     <th className="py-3 px-4 text-right">Actions</th>
@@ -267,16 +267,36 @@ Branch: ${bank.branch || 'Main Branch'}`;
                   {activeBanks.map((bank) => {
                     const isAccCopied = copiedField === `acc_${bank.id}`;
                     const isIfscCopied = copiedField === `ifsc_${bank.id}`;
+                    const isHolderCopied = copiedField === `holder_${bank.id}`;
                     const isAllCopied = copiedField === `all_${bank.id}`;
 
                     return (
                       <tr key={bank.id} className="hover:bg-slate-50/70 transition-colors">
                         <td className="py-3.5 px-4">
-                          <div className="font-semibold text-slate-900 text-sm">{bank.bank_name}</div>
-                          <div className="text-[11px] text-slate-500">{bank.branch || 'Main Branch'}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-900 text-sm sm:text-[15px]">
+                              {bank.account_holder}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(`holder_${bank.id}`, bank.account_holder, 'Beneficiary Name')}
+                              className="text-slate-400 hover:text-blue-600 p-0.5 transition-colors"
+                              title="Copy Beneficiary Name"
+                            >
+                              {isHolderCopied ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
                         </td>
-                        <td className="py-3.5 px-4 font-medium text-slate-800">
-                          {bank.account_holder}
+                        <td className="py-3.5 px-4">
+                          <div className="inline-flex items-center gap-1.5 font-medium text-xs text-blue-700 bg-blue-50/90 border border-blue-200 px-2.5 py-0.5 rounded-md">
+                            <Building2 className="w-3 h-3 text-blue-600 shrink-0" />
+                            <span className="font-semibold">{bank.bank_name}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">{bank.branch || 'Main Branch'}</div>
                         </td>
                         <td className="py-3.5 px-4">
                           <div className="inline-flex items-center gap-1.5 font-mono text-sm font-semibold text-slate-900 bg-slate-50 px-2.5 py-1 rounded border border-slate-200">
@@ -341,16 +361,44 @@ Branch: ${bank.branch || 'Main Branch'}`;
               {activeBanks.map((bank) => {
                 const isAccCopied = copiedField === `acc_${bank.id}`;
                 const isIfscCopied = copiedField === `ifsc_${bank.id}`;
+                const isHolderCopied = copiedField === `holder_${bank.id}`;
                 const isAllCopied = copiedField === `all_${bank.id}`;
 
                 return (
-                  <div key={bank.id} className="p-4 space-y-2.5">
-                    <div className="flex items-center justify-between">
+                  <div key={bank.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
                       <div>
-                        <div className="font-semibold text-slate-900 text-sm">{bank.bank_name}</div>
-                        <div className="text-[11px] text-slate-500">{bank.branch || 'Main Branch'} &bull; {bank.account_holder}</div>
+                        <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">
+                          Account Holder (Beneficiary)
+                        </span>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="font-bold text-slate-900 text-base">
+                            {bank.account_holder}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(`holder_${bank.id}`, bank.account_holder, 'Beneficiary Name')}
+                            className="p-1 text-slate-400 hover:text-blue-600"
+                            title="Copy Beneficiary Name"
+                          >
+                            {isHolderCopied ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-xs font-semibold">
+                            <Building2 className="w-3 h-3 text-blue-600 shrink-0" />
+                            {bank.bank_name}
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            ({bank.branch || 'Main Branch'})
+                          </span>
+                        </div>
                       </div>
-                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">
                         Active
                       </span>
                     </div>
