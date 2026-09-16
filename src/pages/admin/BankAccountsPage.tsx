@@ -52,12 +52,34 @@ export const BankAccountsPage: React.FC = () => {
     status: 'active',
   });
 
-  const loadAccounts = () => {
+  const loadAccounts = async () => {
     setAccounts(db.getBankAccounts());
+    try {
+      const synced = await db.syncAccountsFromCloud();
+      if (synced.banks.length > 0) {
+        setAccounts(synced.banks);
+      }
+    } catch {
+      // Local fallback
+    }
   };
 
   useEffect(() => {
     loadAccounts();
+
+    const handleUpdate = () => {
+      setAccounts(db.getBankAccounts());
+    };
+
+    window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
+    };
   }, []);
 
   const filteredAccounts = useMemo(() => {

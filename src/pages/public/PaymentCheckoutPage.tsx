@@ -25,6 +25,7 @@ import { Input } from '../../components/ui/Input';
 import { Badge } from '../../components/ui/Badge';
 import { copyToClipboard, formatCurrency, formatDate } from '../../lib/utils';
 import { useToast } from '../../context/ToastContext';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 export const PaymentCheckoutPage: React.FC = () => {
   const { linkId } = useParams<{ linkId: string }>();
@@ -52,7 +53,7 @@ export const PaymentCheckoutPage: React.FC = () => {
   // Copy helper
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const loadLinkData = () => {
+  const loadLinkData = async () => {
     setIsLoading(true);
     if (!linkId) {
       setIsLoading(false);
@@ -65,10 +66,10 @@ export const PaymentCheckoutPage: React.FC = () => {
     const s = db.getSettings();
     setSettings(s);
 
-    const banks = db.getActiveBankAccounts();
+    let banks = db.getActiveBankAccounts();
     setActiveBanks(banks);
 
-    const upis = db.getActiveUpiAccounts();
+    let upis = db.getActiveUpiAccounts();
     setActiveUpis(upis);
 
     // If link not yet stored in this browser (e.g. opened in mobile browser or from whatsapp):
@@ -110,10 +111,62 @@ export const PaymentCheckoutPage: React.FC = () => {
     }
 
     setIsLoading(false);
+
+    // Async sync from cloud to get latest live accounts
+    try {
+      const synced = await db.syncAccountsFromCloud();
+      const freshBanks = synced.banks.filter((b) => b.status === 'active');
+      const freshUpis = synced.upis.filter((u) => u.status === 'active');
+      setActiveBanks(freshBanks);
+      setActiveUpis(freshUpis);
+      if (freshUpis.length > 0 && (!selectedUpi || !freshUpis.some((u) => u.id === selectedUpi?.id))) {
+        setSelectedUpi(freshUpis[0]);
+      }
+    } catch {
+      // Local fallback
+    }
   };
 
   useEffect(() => {
     loadLinkData();
+
+    const handleUpdate = () => {
+      loadLinkData();
+    };
+
+    window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
+
+    let realtimeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        realtimeChannel = supabase
+          .channel('checkout_accounts_realtime')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'bank_accounts' },
+            () => loadLinkData()
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'upi_accounts' },
+            () => loadLinkData()
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime channel error:', err);
+      }
+    }
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
+      if (realtimeChannel && supabase) {
+        supabase.removeChannel(realtimeChannel);
+      }
+    };
   }, [linkId]);
 
   // Handle countdown and redirect after submission

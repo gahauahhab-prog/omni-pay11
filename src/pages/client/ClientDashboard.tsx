@@ -25,6 +25,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Input } from '../../components/ui/Input';
 import { QRCodeDisplay } from '../../components/QRCodeDisplay';
 import { copyToClipboard, buildPaymentLinkUrl } from '../../lib/utils';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 
 export const ClientDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -91,12 +92,37 @@ export const ClientDashboard: React.FC = () => {
       // Ignore
     }
 
+    // Realtime Supabase changes across different devices/browsers
+    let realtimeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    if (isSupabaseConfigured() && supabase) {
+      try {
+        realtimeChannel = supabase
+          .channel('client_dashboard_realtime')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'bank_accounts' },
+            () => refreshAccounts()
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'upi_accounts' },
+            () => refreshAccounts()
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime channel error:', err);
+      }
+    }
+
     return () => {
       window.removeEventListener('portal_accounts_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
       window.removeEventListener('focus', handleUpdate);
       if (channel) {
         channel.close();
+      }
+      if (realtimeChannel && supabase) {
+        supabase.removeChannel(realtimeChannel);
       }
     };
   }, []);

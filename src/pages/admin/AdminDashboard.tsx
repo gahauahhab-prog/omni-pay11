@@ -21,7 +21,31 @@ export const AdminDashboard: React.FC = () => {
   const [stats, setStats] = useState(() => db.getDashboardStats());
 
   useEffect(() => {
-    setStats(db.getDashboardStats());
+    const refresh = async () => {
+      setStats(db.getDashboardStats());
+      try {
+        await db.syncAccountsFromCloud();
+        setStats(db.getDashboardStats());
+      } catch {
+        // Fallback to local
+      }
+    };
+
+    refresh();
+
+    const handleUpdate = () => {
+      setStats(db.getDashboardStats());
+    };
+
+    window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
+    };
   }, []);
 
   const summaryCards = [

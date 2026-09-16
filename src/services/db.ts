@@ -155,21 +155,37 @@ class DatabaseService {
           supabase.from('upi_accounts').select('*').order('priority', { ascending: true }),
         ]);
 
-        if (!banksRes.error && banksRes.data && banksRes.data.length > 0) {
-          localBanks = banksRes.data as BankAccount[];
-          setStored(STORAGE_KEYS.BANK_ACCOUNTS, localBanks);
-        } else if (localBanks.length > 0 && (!banksRes.data || banksRes.data.length === 0)) {
-          for (const b of localBanks) {
-            await this.safeSupabaseCall(supabase.from('bank_accounts').upsert(b));
+        const banksSeeded = localStorage.getItem('supabase_banks_init_seeded');
+        if (!banksRes.error && Array.isArray(banksRes.data)) {
+          if (banksRes.data.length > 0) {
+            localBanks = banksRes.data as BankAccount[];
+            setStored(STORAGE_KEYS.BANK_ACCOUNTS, localBanks);
+            localStorage.setItem('supabase_banks_init_seeded', 'true');
+          } else if (!banksSeeded && localBanks.length > 0) {
+            for (const b of localBanks) {
+              await this.safeSupabaseCall(supabase.from('bank_accounts').upsert(b));
+            }
+            localStorage.setItem('supabase_banks_init_seeded', 'true');
+          } else if (banksSeeded && banksRes.data.length === 0) {
+            localBanks = [];
+            setStored(STORAGE_KEYS.BANK_ACCOUNTS, localBanks);
           }
         }
 
-        if (!upisRes.error && upisRes.data && upisRes.data.length > 0) {
-          localUpis = upisRes.data as UpiAccount[];
-          setStored(STORAGE_KEYS.UPI_ACCOUNTS, localUpis);
-        } else if (localUpis.length > 0 && (!upisRes.data || upisRes.data.length === 0)) {
-          for (const u of localUpis) {
-            await this.safeSupabaseCall(supabase.from('upi_accounts').upsert(u));
+        const upisSeeded = localStorage.getItem('supabase_upis_init_seeded');
+        if (!upisRes.error && Array.isArray(upisRes.data)) {
+          if (upisRes.data.length > 0) {
+            localUpis = upisRes.data as UpiAccount[];
+            setStored(STORAGE_KEYS.UPI_ACCOUNTS, localUpis);
+            localStorage.setItem('supabase_upis_init_seeded', 'true');
+          } else if (!upisSeeded && localUpis.length > 0) {
+            for (const u of localUpis) {
+              await this.safeSupabaseCall(supabase.from('upi_accounts').upsert(u));
+            }
+            localStorage.setItem('supabase_upis_init_seeded', 'true');
+          } else if (upisSeeded && upisRes.data.length === 0) {
+            localUpis = [];
+            setStored(STORAGE_KEYS.UPI_ACCOUNTS, localUpis);
           }
         }
       } catch (err) {

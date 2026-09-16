@@ -61,22 +61,47 @@ export const PaymentLinksPage: React.FC = () => {
   // Copied indicator
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const loadData = () => {
+  const loadData = async () => {
     setLinks(db.getPaymentLinks());
     const cl = db.getClients();
     setClients(cl);
     if (cl.length > 0 && !clientId) {
       setClientId(cl[0].id);
     }
-    const upiList = db.getActiveUpiAccounts();
+    let upiList = db.getActiveUpiAccounts();
     setUpis(upiList);
     if (upiList.length > 0 && !selectedUpiId) {
       setSelectedUpiId(upiList[0].id);
+    }
+
+    try {
+      const synced = await db.syncAccountsFromCloud();
+      const freshUpis = synced.upis.filter((u) => u.status === 'active');
+      setUpis(freshUpis);
+      if (freshUpis.length > 0 && (!selectedUpiId || !freshUpis.some((u) => u.id === selectedUpiId))) {
+        setSelectedUpiId(freshUpis[0].id);
+      }
+    } catch {
+      // Local fallback
     }
   };
 
   useEffect(() => {
     loadData();
+
+    const handleUpdate = () => {
+      loadData();
+    };
+
+    window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
+    };
   }, []);
 
   const filteredLinks = useMemo(() => {
