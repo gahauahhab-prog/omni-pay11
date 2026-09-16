@@ -1,0 +1,6 @@
+{
+  "name": "Payment Portal",
+  "description": "Production-ready Payment Information Portal with dedicated Admin and Client panels, bank accounts, UPI IDs, clients management, and activity logs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
