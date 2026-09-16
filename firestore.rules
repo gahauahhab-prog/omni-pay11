@@ -21,7 +21,7 @@ service cloud.firestore {
     // Activity Logs collection
     match /activity_logs/{logId} {
       allow read: if true;
-      allow create: if isValidId(logId);
+      allow write: if isValidId(logId);
     }
 
     // Clients collection (CRM client accounts)

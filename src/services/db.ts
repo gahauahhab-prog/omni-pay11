@@ -405,6 +405,33 @@ class DatabaseService {
     return getStored<ActivityLog[]>(STORAGE_KEYS.ACTIVITY_LOGS, []);
   }
 
+  public async deleteActivityLog(id: string): Promise<boolean> {
+    const logs = getStored<ActivityLog[]>(STORAGE_KEYS.ACTIVITY_LOGS, []);
+    const filtered = logs.filter((l) => l.id !== id);
+    setStored(STORAGE_KEYS.ACTIVITY_LOGS, filtered);
+    this.notifyChange('ACTIVITY_LOGS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      deleteDoc(doc(firestoreDb, 'activity_logs', id)).catch((err) =>
+        console.warn('Firebase log delete warning:', err)
+      );
+    }
+    return true;
+  }
+
+  public async clearActivityLogs(): Promise<boolean> {
+    const logs = getStored<ActivityLog[]>(STORAGE_KEYS.ACTIVITY_LOGS, []);
+    setStored(STORAGE_KEYS.ACTIVITY_LOGS, []);
+    this.notifyChange('ACTIVITY_LOGS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      for (const log of logs) {
+        deleteDoc(doc(firestoreDb, 'activity_logs', log.id)).catch(() => {});
+      }
+    }
+    return true;
+  }
+
   // Bank Accounts
   public getBankAccounts(): BankAccount[] {
     const list = getStored<BankAccount[]>(STORAGE_KEYS.BANK_ACCOUNTS, []);
@@ -875,6 +902,34 @@ class DatabaseService {
     }
   }
 
+  public async deletePaymentLink(
+    id: string,
+    actorName: string = 'Admin',
+    actorId: string = 'admin'
+  ): Promise<boolean> {
+    const links = getStored<PaymentLink[]>(STORAGE_KEYS.PAYMENT_LINKS, []);
+    const cleanId = id.trim().toLowerCase().replace(/\/$/, '');
+    const target = links.find((l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanId);
+    const filtered = links.filter((l) => l.id.trim().toLowerCase().replace(/\/$/, '') !== cleanId);
+    setStored(STORAGE_KEYS.PAYMENT_LINKS, filtered);
+    this.notifyChange('PAYMENT_LINKS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      deleteDoc(doc(firestoreDb, 'payment_links', id)).catch((err) =>
+        console.warn('Firebase link delete error:', err)
+      );
+    }
+
+    await this.logAction(
+      actorName,
+      'Payment Link Deleted',
+      `Deleted payment link ${id} for ${target?.client_name || 'Client'} (₹${target?.amount || 0})`,
+      actorId
+    );
+
+    return true;
+  }
+
   public async createPaymentLink(
     clientId: string,
     amount: number,
@@ -1050,6 +1105,33 @@ class DatabaseService {
   // Transactions
   public getTransactions(): Transaction[] {
     return getStored<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+  }
+
+  public async deleteTransaction(id: string): Promise<boolean> {
+    const txs = getStored<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+    const filtered = txs.filter((t) => t.id !== id);
+    setStored(STORAGE_KEYS.TRANSACTIONS, filtered);
+    this.notifyChange('TRANSACTIONS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      deleteDoc(doc(firestoreDb, 'transactions', id)).catch((err) =>
+        console.warn('Firebase transaction delete warning:', err)
+      );
+    }
+    return true;
+  }
+
+  public async clearTransactions(): Promise<boolean> {
+    const txs = getStored<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
+    setStored(STORAGE_KEYS.TRANSACTIONS, []);
+    this.notifyChange('TRANSACTIONS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      for (const tx of txs) {
+        deleteDoc(doc(firestoreDb, 'transactions', tx.id)).catch(() => {});
+      }
+    }
+    return true;
   }
 
   // Dashboard Stats

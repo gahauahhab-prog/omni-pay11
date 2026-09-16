@@ -15,6 +15,9 @@ import {
   AlertTriangle,
   X,
   FileCheck,
+  FileSpreadsheet,
+  Trash2,
+  Download,
 } from 'lucide-react';
 import { PaymentLink, Client, UpiAccount } from '../../types';
 import { db } from '../../services/db';
@@ -26,6 +29,7 @@ import { Modal } from '../../components/ui/Modal';
 import { Badge } from '../../components/ui/Badge';
 import { Table, Column } from '../../components/ui/Table';
 import { formatCurrency, formatDate, copyToClipboard, buildPaymentLinkUrl } from '../../lib/utils';
+import { exportToExcelFile, exportToCsvFile } from '../../lib/excelExport';
 
 export const PaymentLinksPage: React.FC = () => {
   const { user } = useAuth();
@@ -60,6 +64,7 @@ export const PaymentLinksPage: React.FC = () => {
 
   // Copied indicator
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [deletingLink, setDeletingLink] = useState<PaymentLink | null>(null);
 
   const loadData = async () => {
     setLinks(db.getPaymentLinks());
@@ -224,6 +229,80 @@ export const PaymentLinksPage: React.FC = () => {
     }
   };
 
+  const handleExportExcel = () => {
+    if (filteredLinks.length === 0) {
+      error('Export Failed', 'No payment links found to export.');
+      return;
+    }
+
+    const data = filteredLinks.map((l) => ({
+      'Link ID': l.id,
+      'Client Name': l.client_name,
+      'Amount (₹)': l.amount,
+      'Status': l.status,
+      'Receiving UPI': l.upi_id,
+      'Remarks': l.remarks || '',
+      'UTR Number': l.utr_number || '',
+      'Created Date': formatDate(l.created_at),
+      'Submitted Date': l.submitted_at ? formatDate(l.submitted_at) : '',
+      'Confirmed Date': l.confirmed_at ? formatDate(l.confirmed_at) : '',
+      'Direct URL': buildPaymentLinkUrl(l),
+    }));
+
+    const ok = exportToExcelFile(data, `payment_links_${Date.now()}`, 'Payment Links');
+    if (ok) {
+      success('Export Complete', `Exported ${filteredLinks.length} payment links to Excel (.xlsx).`);
+    } else {
+      error('Export Failed', 'Could not generate Excel spreadsheet.');
+    }
+  };
+
+  const handleExportCsv = () => {
+    if (filteredLinks.length === 0) {
+      error('Export Failed', 'No payment links found to export.');
+      return;
+    }
+
+    const headers = [
+      'Link ID',
+      'Client Name',
+      'Amount',
+      'Status',
+      'Receiving UPI',
+      'Remarks',
+      'UTR Number',
+      'Created Date',
+      'Direct URL',
+    ];
+
+    const rows = filteredLinks.map((l) => [
+      l.id,
+      l.client_name,
+      l.amount,
+      l.status,
+      l.upi_id,
+      l.remarks || '',
+      l.utr_number || '',
+      formatDate(l.created_at),
+      buildPaymentLinkUrl(l),
+    ]);
+
+    const ok = exportToCsvFile(headers, rows, `payment_links_${Date.now()}`);
+    if (ok) {
+      success('Export Complete', `Exported ${filteredLinks.length} payment links to CSV.`);
+    } else {
+      error('Export Failed', 'Could not generate CSV file.');
+    }
+  };
+
+  const confirmDeleteLink = async () => {
+    if (!deletingLink) return;
+    await db.deletePaymentLink(deletingLink.id, user?.full_name || 'Admin', user?.id || 'admin');
+    loadData();
+    setDeletingLink(null);
+    success('Payment Link Deleted', 'The payment link record has been removed.');
+  };
+
   const pendingConfirmationCount = links.filter((l) => l.status === 'Pending Confirmation').length;
 
   const columns: Column<PaymentLink>[] = [
@@ -382,6 +461,15 @@ export const PaymentLinksPage: React.FC = () => {
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
+
+          <button
+            type="button"
+            onClick={() => setDeletingLink(item)}
+            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors ml-0.5"
+            title="Delete Payment Link"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
         </div>
       ),
     },
@@ -397,9 +485,27 @@ export const PaymentLinksPage: React.FC = () => {
             Generate dynamic UPI Intent & QR payment links for clients and verify submitted payment proofs.
           </p>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
-          Generate Payment Link
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportExcel}
+            leftIcon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />}
+          >
+            Export Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            leftIcon={<Download className="w-3.5 h-3.5" />}
+          >
+            Export CSV
+          </Button>
+          <Button onClick={() => setIsModalOpen(true)} leftIcon={<Plus className="w-4 h-4" />}>
+            Generate Payment Link
+          </Button>
+        </div>
       </div>
 
       {/* Pending Confirmation Alert Banner */}
@@ -812,6 +918,44 @@ export const PaymentLinksPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Payment Link Confirmation Modal */}
+      <Modal
+        isOpen={!!deletingLink}
+        onClose={() => setDeletingLink(null)}
+        title="Delete Payment Link"
+        maxWidth="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-red-700">
+              <p className="font-semibold text-red-800">Delete this payment link?</p>
+              <p className="mt-1">
+                Client: <span className="font-medium text-slate-800">{deletingLink?.client_name}</span>
+              </p>
+              <p className="mt-0.5">
+                Amount: <span className="font-bold text-slate-900">{formatCurrency(deletingLink?.amount || 0)}</span>
+              </p>
+              <p className="mt-0.5">
+                Link ID: <span className="font-mono text-slate-800">{deletingLink?.id}</span>
+              </p>
+              <p className="mt-2 text-slate-500">
+                This will remove the payment link and clients will no longer be able to submit proofs through it.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setDeletingLink(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" size="sm" onClick={confirmDeleteLink}>
+              Delete Link
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

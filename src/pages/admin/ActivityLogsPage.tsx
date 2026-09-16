@@ -1,19 +1,51 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { History, Search, Calendar, UserCheck } from 'lucide-react';
+import {
+  History,
+  Search,
+  Calendar,
+  UserCheck,
+  Trash2,
+  FileSpreadsheet,
+  Download,
+  AlertTriangle,
+} from 'lucide-react';
 import { ActivityLog } from '../../types';
 import { db } from '../../services/db';
 import { Table, Column } from '../../components/ui/Table';
 import { Badge } from '../../components/ui/Badge';
 import { Input } from '../../components/ui/Input';
+import { Button } from '../../components/ui/Button';
+import { Modal } from '../../components/ui/Modal';
 import { formatDate } from '../../lib/utils';
+import { exportToExcelFile, exportToCsvFile } from '../../lib/excelExport';
+import { useToast } from '../../context/ToastContext';
 
 export const ActivityLogsPage: React.FC = () => {
+  const { success, error } = useToast();
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [deletingLog, setDeletingLog] = useState<ActivityLog | null>(null);
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+
+  const loadLogs = () => {
+    setLogs(db.getActivityLogs());
+  };
 
   useEffect(() => {
-    setLogs(db.getActivityLogs());
+    loadLogs();
+
+    const handleUpdate = () => {
+      loadLogs();
+    };
+
+    window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
   }, []);
 
   const filteredLogs = useMemo(() => {
@@ -25,6 +57,75 @@ export const ActivityLogsPage: React.FC = () => {
       );
     });
   }, [logs, searchTerm]);
+
+  const handleExportExcel = () => {
+    if (filteredLogs.length === 0) {
+      error('Export Failed', 'No activity logs match the criteria to export.');
+      return;
+    }
+
+    const data = filteredLogs.map((log) => ({
+      'Action Taken': log.action,
+      'User / Actor': log.user_name,
+      'User Role': log.user_role || 'Admin',
+      'Activity Details': log.details,
+      'Date & Time': formatDate(log.created_at),
+      'Raw Timestamp': log.created_at,
+    }));
+
+    const ok = exportToExcelFile(data, `activity_logs_${Date.now()}`, 'Activity Logs');
+    if (ok) {
+      success('Export Complete', `Exported ${filteredLogs.length} logs to Excel (.xlsx).`);
+    } else {
+      error('Export Failed', 'Could not generate Excel spreadsheet.');
+    }
+  };
+
+  const handleExportCsv = () => {
+    if (filteredLogs.length === 0) {
+      error('Export Failed', 'No activity logs match the criteria to export.');
+      return;
+    }
+
+    const headers = [
+      'Action Taken',
+      'User / Actor',
+      'User Role',
+      'Activity Details',
+      'Date & Time',
+      'Raw Timestamp',
+    ];
+    const rows = filteredLogs.map((log) => [
+      log.action,
+      log.user_name,
+      log.user_role || 'Admin',
+      log.details,
+      formatDate(log.created_at),
+      log.created_at,
+    ]);
+
+    const ok = exportToCsvFile(headers, rows, `activity_logs_${Date.now()}`);
+    if (ok) {
+      success('Export Complete', `Exported ${filteredLogs.length} logs to CSV.`);
+    } else {
+      error('Export Failed', 'Could not generate CSV file.');
+    }
+  };
+
+  const confirmDeleteLog = async () => {
+    if (!deletingLog) return;
+    await db.deleteActivityLog(deletingLog.id);
+    loadLogs();
+    setDeletingLog(null);
+    success('Log Deleted', 'The activity log record has been removed.');
+  };
+
+  const confirmClearAll = async () => {
+    await db.clearActivityLogs();
+    loadLogs();
+    setIsClearModalOpen(false);
+    success('Logs Cleared', 'All activity audit logs have been deleted.');
+  };
 
   const columns: Column<ActivityLog>[] = [
     {
@@ -73,15 +174,61 @@ export const ActivityLogsPage: React.FC = () => {
         </div>
       ),
     },
+    {
+      header: 'Action',
+      accessorKey: 'id',
+      render: (item) => (
+        <button
+          type="button"
+          onClick={() => setDeletingLog(item)}
+          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+          title="Delete log record"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      ),
+    },
   ];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight">Audit & Activity Logs</h2>
-        <p className="text-xs text-slate-500 mt-1">
-          Immutable audit trail capturing administrative modifications, credential updates, and client logins.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Audit & Activity Logs</h2>
+          <p className="text-xs text-slate-500 mt-1">
+            System audit trail capturing administrative modifications, credential updates, and client logins.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportExcel}
+            leftIcon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />}
+          >
+            Export Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            leftIcon={<Download className="w-3.5 h-3.5" />}
+          >
+            Export CSV
+          </Button>
+          {logs.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsClearModalOpen(true)}
+              className="text-red-600 hover:bg-red-50 border-red-200"
+              leftIcon={<Trash2 className="w-3.5 h-3.5 text-red-500" />}
+            >
+              Clear All
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex bg-white p-4 rounded-xl border border-slate-200">
@@ -107,6 +254,65 @@ export const ActivityLogsPage: React.FC = () => {
         onPageChange={setCurrentPage}
         emptyMessage="No activity logs found."
       />
+
+      {/* Delete Single Log Modal */}
+      <Modal
+        isOpen={!!deletingLog}
+        onClose={() => setDeletingLog(null)}
+        title="Delete Activity Log"
+        maxWidth="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-red-700">
+              <p className="font-semibold text-red-800">Are you sure you want to delete this log?</p>
+              <p className="mt-1">
+                Action: <span className="font-medium text-slate-800">{deletingLog?.action}</span>
+              </p>
+              <p className="text-[11px] text-slate-600 mt-0.5">{deletingLog?.details}</p>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setDeletingLog(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" size="sm" onClick={confirmDeleteLog}>
+              Delete Log
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Clear All Logs Modal */}
+      <Modal
+        isOpen={isClearModalOpen}
+        onClose={() => setIsClearModalOpen(false)}
+        title="Clear All Activity Logs"
+        maxWidth="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-xl border border-red-100">
+            <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-red-700">
+              <p className="font-semibold text-red-800">Clear all activity audit logs?</p>
+              <p className="mt-1">
+                This will permanently delete all {logs.length} activity records. This action cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setIsClearModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" size="sm" onClick={confirmClearAll}>
+              Yes, Clear All Logs
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
