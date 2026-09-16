@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function for valid document IDs
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Bank Accounts collection
+    match /bank_accounts/{accountId} {
+      allow read: if true;
+      allow write: if isValidId(accountId);
+    }
+
+    // UPI Accounts collection
+    match /upi_accounts/{accountId} {
+      allow read: if true;
+      allow write: if isValidId(accountId);
+    }
+
+    // Activity Logs collection
+    match /activity_logs/{logId} {
+      allow read: if true;
+      allow create: if isValidId(logId);
+    }
+
+    // Clients collection (CRM client accounts)
+    match /clients/{clientId} {
+      allow read: if true;
+      allow write: if isValidId(clientId);
+    }
+
+    // Transactions collection (Payment proofs / UTR submissions)
+    match /transactions/{txId} {
+      allow read: if true;
+      allow write: if isValidId(txId);
+    }
+
+    // Payment Links collection
+    match /payment_links/{linkId} {
+      allow read: if true;
+      allow write: if isValidId(linkId);
+    }
+
+    // Settings collection
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isValidId(settingId);
+    }
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

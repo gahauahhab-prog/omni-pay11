@@ -92,7 +92,12 @@ export const ClientDashboard: React.FC = () => {
       // Ignore
     }
 
-    // Realtime Supabase changes across different devices/browsers
+    // Firebase Firestore Realtime Sync across all devices & browsers
+    const unsubFirestore = db.subscribeToRealtimeUpdates(() => {
+      refreshAccounts();
+    });
+
+    // Realtime Supabase changes across different devices/browsers (if Supabase also present)
     let realtimeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -121,6 +126,7 @@ export const ClientDashboard: React.FC = () => {
       if (channel) {
         channel.close();
       }
+      unsubFirestore();
       if (realtimeChannel && supabase) {
         supabase.removeChannel(realtimeChannel);
       }

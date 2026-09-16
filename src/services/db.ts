@@ -19,6 +19,16 @@ import {
   INITIAL_TRANSACTIONS,
 } from './seedData';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+  updateDoc,
+  onSnapshot,
+} from 'firebase/firestore';
+import { firestoreDb, isFirebaseConfigured } from '../lib/firebase';
 
 const STORAGE_KEYS = {
   PROFILES: 'payment_portal_profiles',
@@ -117,8 +127,9 @@ class DatabaseService {
     }
 
     this.initialized = true;
-    // Trigger background cloud sync if Supabase is configured
+    // Trigger background cloud sync
     this.syncAccountsFromCloud().catch(() => {});
+    this.syncClientsFromCloud().catch(() => {});
   }
 
   private notifyChange(type: string) {
@@ -144,10 +155,158 @@ class DatabaseService {
     }
   }
 
+  public subscribeToRealtimeUpdates(callback: () => void): () => void {
+    if (!isFirebaseConfigured() || !firestoreDb) {
+      return () => {};
+    }
+
+    try {
+      const unsubBanks = onSnapshot(
+        collection(firestoreDb, 'bank_accounts'),
+        (snapshot) => {
+          const remoteBanks: BankAccount[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteBanks.push(docSnap.data() as BankAccount);
+          });
+          if (remoteBanks.length > 0) {
+            setStored(STORAGE_KEYS.BANK_ACCOUNTS, remoteBanks.sort((a, b) => a.priority - b.priority));
+          }
+          callback();
+        },
+        (err) => console.warn('Firestore realtime banks error:', err)
+      );
+
+      const unsubUpis = onSnapshot(
+        collection(firestoreDb, 'upi_accounts'),
+        (snapshot) => {
+          const remoteUpis: UpiAccount[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteUpis.push(docSnap.data() as UpiAccount);
+          });
+          if (remoteUpis.length > 0) {
+            setStored(STORAGE_KEYS.UPI_ACCOUNTS, remoteUpis.sort((a, b) => a.priority - b.priority));
+          }
+          callback();
+        },
+        (err) => console.warn('Firestore realtime upis error:', err)
+      );
+
+      const unsubClients = onSnapshot(
+        collection(firestoreDb, 'clients'),
+        (snapshot) => {
+          const remoteClients: Client[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteClients.push(docSnap.data() as Client);
+          });
+          if (remoteClients.length > 0) {
+            setStored(STORAGE_KEYS.CLIENTS, remoteClients);
+          }
+          callback();
+        },
+        (err) => console.warn('Firestore realtime clients error:', err)
+      );
+
+      return () => {
+        unsubBanks();
+        unsubUpis();
+        unsubClients();
+      };
+    } catch (e) {
+      console.warn('Failed to attach firestore realtime listener:', e);
+      return () => {};
+    }
+  }
+
+  public async syncClientsFromCloud(): Promise<Client[]> {
+    let localClients = this.getClients();
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const snap = await getDocs(collection(firestoreDb, 'clients'));
+        const remoteClients: Client[] = [];
+        snap.forEach((docSnap) => {
+          remoteClients.push(docSnap.data() as Client);
+        });
+
+        const clientsSeeded = localStorage.getItem('firebase_clients_init_seeded');
+        if (remoteClients.length > 0) {
+          localClients = remoteClients;
+          setStored(STORAGE_KEYS.CLIENTS, localClients);
+          localStorage.setItem('firebase_clients_init_seeded', 'true');
+        } else if (!clientsSeeded && localClients.length > 0) {
+          for (const c of localClients) {
+            await setDoc(doc(firestoreDb, 'clients', c.id), c);
+          }
+          localStorage.setItem('firebase_clients_init_seeded', 'true');
+        } else if (clientsSeeded && remoteClients.length === 0) {
+          localClients = [];
+          setStored(STORAGE_KEYS.CLIENTS, localClients);
+        }
+      } catch (err) {
+        console.warn('Firebase Firestore clients sync failed:', err);
+      }
+    }
+    return localClients;
+  }
+
   public async syncAccountsFromCloud(): Promise<{ banks: BankAccount[]; upis: UpiAccount[] }> {
     let localBanks = this.getBankAccounts();
     let localUpis = this.getUpiAccounts();
 
+    // 1. Firebase Firestore sync (Primary)
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const [banksSnap, upisSnap] = await Promise.all([
+          getDocs(collection(firestoreDb, 'bank_accounts')),
+          getDocs(collection(firestoreDb, 'upi_accounts')),
+        ]);
+
+        const remoteBanks: BankAccount[] = [];
+        banksSnap.forEach((docSnap) => {
+          remoteBanks.push(docSnap.data() as BankAccount);
+        });
+
+        const remoteUpis: UpiAccount[] = [];
+        upisSnap.forEach((docSnap) => {
+          remoteUpis.push(docSnap.data() as UpiAccount);
+        });
+
+        const banksSeeded = localStorage.getItem('firebase_banks_init_seeded');
+        if (remoteBanks.length > 0) {
+          localBanks = remoteBanks.sort((a, b) => a.priority - b.priority);
+          setStored(STORAGE_KEYS.BANK_ACCOUNTS, localBanks);
+          localStorage.setItem('firebase_banks_init_seeded', 'true');
+        } else if (!banksSeeded && localBanks.length > 0) {
+          for (const b of localBanks) {
+            await setDoc(doc(firestoreDb, 'bank_accounts', b.id), b);
+          }
+          localStorage.setItem('firebase_banks_init_seeded', 'true');
+        } else if (banksSeeded && remoteBanks.length === 0) {
+          localBanks = [];
+          setStored(STORAGE_KEYS.BANK_ACCOUNTS, localBanks);
+        }
+
+        const upisSeeded = localStorage.getItem('firebase_upis_init_seeded');
+        if (remoteUpis.length > 0) {
+          localUpis = remoteUpis.sort((a, b) => a.priority - b.priority);
+          setStored(STORAGE_KEYS.UPI_ACCOUNTS, localUpis);
+          localStorage.setItem('firebase_upis_init_seeded', 'true');
+        } else if (!upisSeeded && localUpis.length > 0) {
+          for (const u of localUpis) {
+            await setDoc(doc(firestoreDb, 'upi_accounts', u.id), u);
+          }
+          localStorage.setItem('firebase_upis_init_seeded', 'true');
+        } else if (upisSeeded && remoteUpis.length === 0) {
+          localUpis = [];
+          setStored(STORAGE_KEYS.UPI_ACCOUNTS, localUpis);
+        }
+
+        return { banks: localBanks, upis: localUpis };
+      } catch (err) {
+        console.warn('Firebase Firestore sync failed:', err);
+      }
+    }
+
+    // 2. Supabase fallback (Secondary if configured)
     if (isSupabaseConfigured() && supabase) {
       try {
         const [banksRes, upisRes] = await Promise.all([
@@ -217,6 +376,12 @@ class DatabaseService {
     const logs = getStored<ActivityLog[]>(STORAGE_KEYS.ACTIVITY_LOGS, []);
     const updated = [newLog, ...logs];
     setStored(STORAGE_KEYS.ACTIVITY_LOGS, updated);
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      setDoc(doc(firestoreDb, 'activity_logs', newLog.id), newLog).catch((err) =>
+        console.warn('Firebase log insert warning:', err)
+      );
+    }
 
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -302,6 +467,12 @@ class DatabaseService {
     setStored(STORAGE_KEYS.BANK_ACCOUNTS, accounts);
     this.notifyChange('BANK_ACCOUNTS');
 
+    if (isFirebaseConfigured() && firestoreDb) {
+      setDoc(doc(firestoreDb, 'bank_accounts', saved.id), saved).catch((e) =>
+        console.warn('Firebase bank save error:', e)
+      );
+    }
+
     if (isSupabaseConfigured() && supabase) {
       this.safeSupabaseCall(supabase.from('bank_accounts').upsert(saved));
     }
@@ -321,6 +492,12 @@ class DatabaseService {
     const filtered = accounts.filter((a) => a.id !== id);
     setStored(STORAGE_KEYS.BANK_ACCOUNTS, filtered);
     this.notifyChange('BANK_ACCOUNTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      deleteDoc(doc(firestoreDb, 'bank_accounts', id)).catch((e) =>
+        console.warn('Firebase bank delete error:', e)
+      );
+    }
 
     if (isSupabaseConfigured() && supabase) {
       this.safeSupabaseCall(supabase.from('bank_accounts').delete().eq('id', id));
@@ -347,6 +524,12 @@ class DatabaseService {
     target.status = target.status === 'active' ? 'inactive' : 'active';
     setStored(STORAGE_KEYS.BANK_ACCOUNTS, accounts);
     this.notifyChange('BANK_ACCOUNTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      updateDoc(doc(firestoreDb, 'bank_accounts', id), { status: target.status }).catch((e) =>
+        console.warn('Firebase bank status update error:', e)
+      );
+    }
 
     if (isSupabaseConfigured() && supabase) {
       this.safeSupabaseCall(
@@ -423,6 +606,12 @@ class DatabaseService {
     setStored(STORAGE_KEYS.UPI_ACCOUNTS, list);
     this.notifyChange('UPI_ACCOUNTS');
 
+    if (isFirebaseConfigured() && firestoreDb) {
+      setDoc(doc(firestoreDb, 'upi_accounts', saved.id), saved).catch((e) =>
+        console.warn('Firebase upi save error:', e)
+      );
+    }
+
     if (isSupabaseConfigured() && supabase) {
       this.safeSupabaseCall(supabase.from('upi_accounts').upsert(saved));
     }
@@ -442,6 +631,12 @@ class DatabaseService {
     const filtered = list.filter((a) => a.id !== id);
     setStored(STORAGE_KEYS.UPI_ACCOUNTS, filtered);
     this.notifyChange('UPI_ACCOUNTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      deleteDoc(doc(firestoreDb, 'upi_accounts', id)).catch((e) =>
+        console.warn('Firebase upi delete error:', e)
+      );
+    }
 
     if (isSupabaseConfigured() && supabase) {
       this.safeSupabaseCall(supabase.from('upi_accounts').delete().eq('id', id));
@@ -468,6 +663,12 @@ class DatabaseService {
     target.status = target.status === 'active' ? 'inactive' : 'active';
     setStored(STORAGE_KEYS.UPI_ACCOUNTS, list);
     this.notifyChange('UPI_ACCOUNTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      updateDoc(doc(firestoreDb, 'upi_accounts', id), { status: target.status }).catch((e) =>
+        console.warn('Firebase upi status update error:', e)
+      );
+    }
 
     if (isSupabaseConfigured() && supabase) {
       this.safeSupabaseCall(
@@ -538,6 +739,14 @@ class DatabaseService {
     }
 
     setStored(STORAGE_KEYS.CLIENTS, clients);
+    this.notifyChange('CLIENTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      setDoc(doc(firestoreDb, 'clients', saved.id), saved).catch((e) =>
+        console.warn('Firebase client save error:', e)
+      );
+    }
+
     return saved;
   }
 
@@ -552,6 +761,13 @@ class DatabaseService {
 
     const filtered = clients.filter((c) => c.id !== id);
     setStored(STORAGE_KEYS.CLIENTS, filtered);
+    this.notifyChange('CLIENTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      deleteDoc(doc(firestoreDb, 'clients', id)).catch((e) =>
+        console.warn('Firebase client delete error:', e)
+      );
+    }
 
     await this.logAction(
       actorName,
@@ -573,6 +789,13 @@ class DatabaseService {
 
     target.status = target.status === 'active' ? 'disabled' : 'active';
     setStored(STORAGE_KEYS.CLIENTS, clients);
+    this.notifyChange('CLIENTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      updateDoc(doc(firestoreDb, 'clients', id), { status: target.status }).catch((e) =>
+        console.warn('Firebase client status update error:', e)
+      );
+    }
 
     await this.logAction(
       actorName,
@@ -595,6 +818,13 @@ class DatabaseService {
 
     target.password = newPass;
     setStored(STORAGE_KEYS.CLIENTS, clients);
+    this.notifyChange('CLIENTS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      updateDoc(doc(firestoreDb, 'clients', id), { password: newPass }).catch((e) =>
+        console.warn('Firebase client password update error:', e)
+      );
+    }
 
     await this.logAction(
       actorName,

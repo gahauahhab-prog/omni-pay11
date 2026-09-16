@@ -98,8 +98,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // 2. Check Clients
-    const clients = db.getClients();
-    const matchedClient = clients.find((c) => c.email.toLowerCase() === cleanEmail);
+    let clients = db.getClients();
+    let matchedClient = clients.find((c) => c.email.toLowerCase() === cleanEmail);
+
+    if (!matchedClient) {
+      // Sync from cloud database in case client was added from another device/browser
+      try {
+        clients = await db.syncClientsFromCloud();
+        matchedClient = clients.find((c) => c.email.toLowerCase() === cleanEmail);
+      } catch (err) {
+        console.warn('Cloud client lookup failed during login:', err);
+      }
+    }
 
     if (matchedClient) {
       if (matchedClient.status === 'disabled') {

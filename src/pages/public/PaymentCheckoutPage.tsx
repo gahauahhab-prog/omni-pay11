@@ -138,6 +138,11 @@ export const PaymentCheckoutPage: React.FC = () => {
     window.addEventListener('storage', handleUpdate);
     window.addEventListener('focus', handleUpdate);
 
+    // Firebase Firestore Realtime Subscription
+    const unsubFirestore = db.subscribeToRealtimeUpdates(() => {
+      loadLinkData();
+    });
+
     let realtimeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
     if (isSupabaseConfigured() && supabase) {
       try {
@@ -163,6 +168,7 @@ export const PaymentCheckoutPage: React.FC = () => {
       window.removeEventListener('portal_accounts_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
       window.removeEventListener('focus', handleUpdate);
+      unsubFirestore();
       if (realtimeChannel && supabase) {
         supabase.removeChannel(realtimeChannel);
       }

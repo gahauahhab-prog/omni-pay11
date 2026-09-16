@@ -72,10 +72,15 @@ export const UpiAccountsPage: React.FC = () => {
     window.addEventListener('storage', handleUpdate);
     window.addEventListener('focus', handleUpdate);
 
+    const unsubFirestore = db.subscribeToRealtimeUpdates(() => {
+      loadAccounts();
+    });
+
     return () => {
       window.removeEventListener('portal_accounts_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
       window.removeEventListener('focus', handleUpdate);
+      unsubFirestore();
     };
   }, []);
 

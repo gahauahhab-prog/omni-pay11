@@ -57,6 +57,28 @@ export const ClientsPage: React.FC = () => {
 
   useEffect(() => {
     loadClients();
+    db.syncClientsFromCloud().then((synced) => {
+      setClients(synced);
+    });
+
+    const handleUpdate = () => {
+      loadClients();
+    };
+
+    window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
+
+    const unsubFirestore = db.subscribeToRealtimeUpdates(() => {
+      loadClients();
+    });
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
+      unsubFirestore();
+    };
   }, []);
 
   const filteredClients = useMemo(() => {
