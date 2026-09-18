@@ -92,7 +92,6 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
 
   // UPI Modals
   const [isUpiFormOpen, setIsUpiFormOpen] = useState(false);
-  const [isUpiPreviewOpen, setIsUpiPreviewOpen] = useState(false);
   const [isUpiDeleteOpen, setIsUpiDeleteOpen] = useState(false);
   const [selectedUpi, setSelectedUpi] = useState<UpiAccount | null>(null);
 
@@ -323,11 +322,6 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
     setIsUpiFormOpen(true);
   };
 
-  const openPreviewUpiModal = (account: UpiAccount) => {
-    setSelectedUpi(account);
-    setIsUpiPreviewOpen(true);
-  };
-
   const openDeleteUpiModal = (account: UpiAccount) => {
     setSelectedUpi(account);
     setIsUpiDeleteOpen(true);
@@ -554,22 +548,15 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
       header: 'QR Code',
       className: 'text-center w-24',
       render: (item) => (
-        <button
-          onClick={() => openPreviewUpiModal(item)}
-          className="group relative inline-flex items-center justify-center p-1.5 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 transition-all cursor-pointer"
-          title="Click to preview QR code"
-        >
+        <div className="inline-flex items-center justify-center p-1 rounded-lg border border-slate-200 bg-white">
           <QRCodeDisplay
             upiId={item.upi_id}
             payeeName="Portal Settlement"
-            size={36}
+            size={34}
             qrUrl={item.qr_url}
             showActions={false}
           />
-          <div className="absolute inset-0 bg-slate-900/10 rounded-lg opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-            <Eye className="w-3.5 h-3.5 text-blue-700" />
-          </div>
-        </button>
+        </div>
       ),
     },
     {
@@ -602,13 +589,6 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
       className: 'text-right pr-5',
       render: (item) => (
         <div className="flex items-center justify-end gap-1.5">
-          <button
-            onClick={() => openPreviewUpiModal(item)}
-            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
-            title="Preview QR Code"
-          >
-            <Eye className="w-4 h-4" />
-          </button>
           <button
             onClick={() => openEditUpiModal(item)}
             className="p-1.5 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
@@ -1139,55 +1119,41 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
               QR Code Setup
             </h4>
 
-            <div className="flex flex-col sm:flex-row items-center gap-6">
-              {/* Live Preview */}
-              <div className="p-3 bg-white rounded-lg border border-slate-200 shadow-2xs flex flex-col items-center">
-                <QRCodeDisplay
-                  upiId={upiFormData.upi_id || 'sample@upi'}
-                  payeeName="Payment Portal"
-                  size={120}
-                  qrUrl={upiFormData.qr_url}
-                  showActions={false}
-                />
-                <span className="text-[10px] font-semibold text-slate-500 mt-2">Live Preview</span>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Upload Custom Static QR Code Image (Optional)
+                </label>
+                <label className="flex items-center justify-center gap-2 px-3 py-2.5 border border-slate-300 border-dashed rounded-lg cursor-pointer hover:bg-white transition-colors text-xs text-slate-600 font-medium bg-white/50">
+                  <Upload className="w-4 h-4 text-slate-400" />
+                  <span>Choose PNG/JPG from computer...</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  If left empty, a dynamic QR code will automatically be generated using standard
+                  UPI protocol.
+                </p>
               </div>
 
-              <div className="flex-1 space-y-3 w-full">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Upload Custom Static QR Code Image (Optional)
-                  </label>
-                  <label className="flex items-center justify-center gap-2 px-3 py-2 border border-slate-300 border-dashed rounded-lg cursor-pointer hover:bg-white transition-colors text-xs text-slate-600 font-medium">
-                    <Upload className="w-4 h-4 text-slate-400" />
-                    <span>Choose PNG/JPG from computer...</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    If left empty, a dynamic QR code will automatically be generated using standard
-                    UPI protocol.
-                  </p>
+              {upiFormData.qr_url && (
+                <div className="flex items-center justify-between text-xs bg-white p-2.5 rounded-lg border border-emerald-200 text-emerald-800">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Custom QR image attached
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setUpiFormData({ ...upiFormData, qr_url: '' })}
+                    className="text-rose-600 hover:underline text-xs font-medium cursor-pointer"
+                  >
+                    Remove
+                  </button>
                 </div>
-
-                {upiFormData.qr_url && (
-                  <div className="flex items-center justify-between text-xs bg-white p-2 rounded border border-emerald-200 text-emerald-800">
-                    <span className="flex items-center gap-1 font-medium">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Custom QR image attached
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setUpiFormData({ ...upiFormData, qr_url: '' })}
-                      className="text-rose-600 hover:underline text-[11px]"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
             </div>
           </div>
 
@@ -1237,42 +1203,6 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
             </Button>
           </div>
         </form>
-      </Modal>
-
-      {/* QR Code Preview Modal */}
-      <Modal
-        isOpen={isUpiPreviewOpen}
-        onClose={() => setIsUpiPreviewOpen(false)}
-        title="UPI QR Code & Details"
-        description="Scan to verify payment routing"
-        maxWidth="sm"
-      >
-        {selectedUpi && (
-          <div className="space-y-4">
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col items-center text-center">
-              <QRCodeDisplay
-                upiId={selectedUpi.upi_id}
-                upiApp={selectedUpi.upi_app}
-                payeeName="Payment Portal"
-                size={190}
-                qrUrl={selectedUpi.qr_url}
-                showActions={true}
-              />
-
-              <div className="mt-2">
-                <div className="flex justify-center">
-                  <Badge variant={selectedUpi.status === 'active' ? 'active' : 'inactive'}>
-                    {selectedUpi.status.toUpperCase()}
-                  </Badge>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <Button onClick={() => setIsUpiPreviewOpen(false)}>Close</Button>
-            </div>
-          </div>
-        )}
       </Modal>
 
       {/* Delete UPI Modal */}

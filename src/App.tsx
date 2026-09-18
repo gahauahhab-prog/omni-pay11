@@ -26,7 +26,6 @@ import { ClientDashboard } from './pages/client/ClientDashboard';
 import { ClientManageLinksPage } from './pages/client/ClientManageLinksPage';
 import { ClientHistoryPage } from './pages/client/ClientHistoryPage';
 import { ClientSupportPage } from './pages/client/ClientSupportPage';
-import { PreviewSwitcher } from './components/PreviewSwitcher';
 
 // Protected Route for Admins
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -149,7 +148,6 @@ export default function App() {
             <Route path="/" element={<RootRedirect />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-          <PreviewSwitcher />
         </BrowserRouter>
       </ToastProvider>
     </AuthProvider>

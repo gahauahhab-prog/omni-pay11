@@ -336,7 +336,7 @@ export const ClientsPage: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">Clients Management</h2>
           <p className="text-xs text-slate-500 mt-1">
-            Create customer accounts, manage login credentials, and preview client view via "Login As Client".
+            Create customer accounts, manage login credentials, and access client portal via "Login As Client".
           </p>
         </div>
         <Button onClick={openAddModal} leftIcon={<Plus className="w-4 h-4" />}>
