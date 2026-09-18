@@ -61,6 +61,7 @@ export const PaymentLinksPage: React.FC = () => {
 
   // Review Proof Modal State
   const [reviewLink, setReviewLink] = useState<PaymentLink | null>(null);
+  const [selectedSubmissionIndex, setSelectedSubmissionIndex] = useState<number>(0);
   const [isRejecting, setIsRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
@@ -154,6 +155,13 @@ export const PaymentLinksPage: React.FC = () => {
     }
 
     try {
+      const syncedLinks = await db.syncPaymentLinksFromCloud();
+      setLinks(syncedLinks);
+    } catch {
+      // Local fallback
+    }
+
+    try {
       const synced = await db.syncAccountsFromCloud();
       const freshUpis = synced.upis.filter((u) => u.status === 'active');
       setUpis(freshUpis);
@@ -173,13 +181,28 @@ export const PaymentLinksPage: React.FC = () => {
     };
 
     window.addEventListener('portal_accounts_updated', handleUpdate);
+    window.addEventListener('payment_link_edited_saved', handleUpdate);
     window.addEventListener('storage', handleUpdate);
     window.addEventListener('focus', handleUpdate);
 
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('payment_portal_channel');
+      channel.onmessage = () => {
+        loadData();
+      };
+    } catch {
+      // Ignore
+    }
+
     return () => {
       window.removeEventListener('portal_accounts_updated', handleUpdate);
+      window.removeEventListener('payment_link_edited_saved', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
       window.removeEventListener('focus', handleUpdate);
+      if (channel) {
+        channel.close();
+      }
     };
   }, []);
 
@@ -403,26 +426,50 @@ export const PaymentLinksPage: React.FC = () => {
       header: 'Status',
       accessorKey: 'status',
       render: (item) => {
-        if (item.status === 'Paid') return <Badge variant="paid">Paid</Badge>;
+        if (item.status === 'Paid') {
+          return (
+            <div className="space-y-0.5">
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                <Check className="w-3 h-3 text-emerald-600 stroke-[3]" />
+                Review Done ✓
+              </span>
+              {item.confirmed_at && (
+                <span className="text-[10px] text-emerald-700 font-mono block">
+                  {formatDate(item.confirmed_at)}
+                </span>
+              )}
+            </div>
+          );
+        }
         if (item.status === 'Pending Confirmation') {
-          return <Badge variant="review">Pending Confirmation</Badge>;
+          return (
+            <div className="space-y-0.5">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                <Clock className="w-3 h-3 text-amber-600" />
+                Pending Review
+              </span>
+              <span className="text-[10px] text-amber-700 font-medium block">
+                Proof Uploaded
+              </span>
+            </div>
+          );
         }
         if (item.status === 'Rejected') return <Badge variant="rejected">Rejected</Badge>;
         if (item.status === 'Expired') return <Badge variant="expired">Expired</Badge>;
-        return <Badge variant="pending">Pending</Badge>;
+        return <Badge variant="pending">Active / Pending</Badge>;
       },
     },
     {
       header: 'Proof & UTR',
       render: (item) => {
-        if (item.status === 'Pending Confirmation' || item.screenshot_url) {
+        if (item.status === 'Pending Confirmation' || item.status === 'Paid' || item.screenshot_url) {
           return (
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setReviewLink(item)}
                 className="group relative cursor-pointer"
-                title="Click to review screenshot"
+                title="Click to review screenshot and proof details"
               >
                 {item.screenshot_url ? (
                   <img
@@ -476,11 +523,24 @@ export const PaymentLinksPage: React.FC = () => {
             <Button
               size="sm"
               variant="primary"
-              className="bg-amber-600 hover:bg-amber-700 text-white shadow-xs text-xs px-2.5 py-1"
+              className="bg-amber-600 hover:bg-amber-700 text-white shadow-xs text-xs px-2.5 py-1 font-semibold"
               onClick={() => setReviewLink(item)}
               leftIcon={<Eye className="w-3.5 h-3.5" />}
             >
               Review Proof
+            </Button>
+          )}
+
+          {item.status === 'Paid' && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs px-2.5 py-1 text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border-emerald-300 font-semibold"
+              onClick={() => setReviewLink(item)}
+              leftIcon={<Check className="w-3.5 h-3.5 text-emerald-600 stroke-[3]" />}
+              title="Click to view verified settlement details"
+            >
+              Review Done ✓
             </Button>
           )}
 
@@ -843,59 +903,104 @@ export const PaymentLinksPage: React.FC = () => {
           maxWidth="lg"
         >
           <div className="space-y-4">
-            {/* Summary Details */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
-              <div>
-                <span className="text-[11px] text-slate-400 block">Client</span>
-                <span className="font-bold text-slate-900">{reviewLink.client_name}</span>
-              </div>
-              <div>
-                <span className="text-[11px] text-slate-400 block">Amount</span>
-                <span className="font-bold text-emerald-700 text-sm">
-                  {formatCurrency(reviewLink.amount)}
-                </span>
-              </div>
-              <div>
-                <span className="text-[11px] text-slate-400 block">Submitted At</span>
-                <span className="text-slate-700">
-                  {reviewLink.submitted_at ? formatDate(reviewLink.submitted_at) : 'Just now'}
-                </span>
-              </div>
-              {reviewLink.utr_number && (
-                <div className="col-span-2 sm:col-span-3 pt-2 border-t border-slate-200/60 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500 font-semibold">
-                    Client Reported UTR / Ref No:
-                  </span>
-                  <span className="font-mono font-bold text-slate-900 bg-white px-2.5 py-1 rounded border border-slate-300">
-                    {reviewLink.utr_number}
+            {/* Perpetual link submissions selector if multiple exist */}
+            {reviewLink.submissions && reviewLink.submissions.length > 1 && (
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs space-y-2">
+                <div className="font-semibold text-blue-950 flex items-center justify-between">
+                  <span>Submissions on this Perpetual Link ({reviewLink.submissions.length}):</span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded border border-emerald-300">
+                    Always Active Link
                   </span>
                 </div>
-              )}
-            </div>
+                <div className="flex gap-1.5 overflow-x-auto pb-1">
+                  {reviewLink.submissions.map((s, idx) => (
+                    <button
+                      key={s.id || idx}
+                      type="button"
+                      onClick={() => setSelectedSubmissionIndex(idx)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold shrink-0 cursor-pointer border transition-colors ${
+                        selectedSubmissionIndex === idx
+                          ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      #{reviewLink.submissions!.length - idx} &bull; ₹{s.amount.toLocaleString('en-IN')}{' '}
+                      <span className={`text-[10px] ml-1 px-1 rounded ${s.status === 'Paid' ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-200 text-amber-900'}`}>
+                        {s.status === 'Paid' ? '✓ Paid' : 'Pending'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
-            {/* Screenshot Preview */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Submitted Payment Screenshot:
-              </label>
-              {reviewLink.screenshot_url ? (
-                <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-slate-950/5 text-center p-2">
-                  <img
-                    src={reviewLink.screenshot_url}
-                    alt="Payment Screenshot"
-                    className="max-h-72 mx-auto rounded-lg object-contain cursor-pointer hover:opacity-95 transition-opacity"
-                    onClick={() => setFullImageView(reviewLink.screenshot_url || null)}
-                  />
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Click image to view full size
-                  </p>
-                </div>
-              ) : (
-                <div className="p-8 text-center bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500">
-                  No screenshot uploaded.
-                </div>
-              )}
-            </div>
+            {(() => {
+              const activeSub = (reviewLink.submissions && reviewLink.submissions[selectedSubmissionIndex]) || {
+                amount: reviewLink.last_paid_amount || reviewLink.amount,
+                submitted_at: reviewLink.submitted_at,
+                utr_number: reviewLink.utr_number,
+                screenshot_url: reviewLink.screenshot_url,
+                status: reviewLink.status,
+              };
+
+              return (
+                <>
+                  {/* Summary Details */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+                    <div>
+                      <span className="text-[11px] text-slate-400 block">Client</span>
+                      <span className="font-bold text-slate-900">{reviewLink.client_name}</span>
+                    </div>
+                    <div>
+                      <span className="text-[11px] text-slate-400 block">Submission Amount</span>
+                      <span className="font-bold text-emerald-700 text-sm">
+                        {formatCurrency(activeSub.amount || reviewLink.amount)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[11px] text-slate-400 block">Submitted At</span>
+                      <span className="text-slate-700">
+                        {activeSub.submitted_at ? formatDate(activeSub.submitted_at) : 'Just now'}
+                      </span>
+                    </div>
+                    {activeSub.utr_number && (
+                      <div className="col-span-2 sm:col-span-3 pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                        <span className="text-[11px] text-slate-500 font-semibold">
+                          Client Reported UTR / Ref No:
+                        </span>
+                        <span className="font-mono font-bold text-slate-900 bg-white px-2.5 py-1 rounded border border-slate-300">
+                          {activeSub.utr_number}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Screenshot Preview */}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Submitted Payment Screenshot:
+                    </label>
+                    {activeSub.screenshot_url ? (
+                      <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-slate-950/5 text-center p-2">
+                        <img
+                          src={activeSub.screenshot_url}
+                          alt="Payment Screenshot"
+                          className="max-h-72 mx-auto rounded-lg object-contain cursor-pointer hover:opacity-95 transition-opacity"
+                          onClick={() => setFullImageView(activeSub.screenshot_url || null)}
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Click image to view full size
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-8 text-center bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500">
+                        No screenshot uploaded.
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Rejection Form Input */}
             {isRejecting && (

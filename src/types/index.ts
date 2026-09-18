@@ -56,11 +56,25 @@ export interface Client {
 
 export type PaymentLinkType = 'one_time' | 'live';
 
+export interface PaymentSubmission {
+  id: string;
+  amount: number;
+  utr_number: string;
+  screenshot_url?: string;
+  submitted_at: string;
+  status: PaymentLinkStatus;
+  confirmed_at?: string;
+  confirmed_by?: string;
+  rejection_reason?: string;
+  method?: string;
+}
+
 export interface PaymentLink {
   id: string;
   client_id: string;
   client_name?: string;
   amount: number;
+  last_paid_amount?: number;
   status: PaymentLinkStatus;
   remarks?: string;
   link_type?: PaymentLinkType; // 'one_time' | 'live'
@@ -74,6 +88,7 @@ export interface PaymentLink {
   screenshot_url?: string;
   utr_number?: string;
   submitted_at?: string;
+  submissions?: PaymentSubmission[];
   redirect_url?: string;
   confirmed_at?: string;
   confirmed_by?: string;

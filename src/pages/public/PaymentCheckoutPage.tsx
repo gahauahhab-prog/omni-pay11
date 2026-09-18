@@ -8,6 +8,8 @@ import {
   Check,
   Upload,
   AlertCircle,
+  AlertTriangle,
+  Clock,
   ArrowRight,
   CheckCircle2,
   Smartphone,
@@ -124,12 +126,18 @@ export const PaymentCheckoutPage: React.FC = () => {
         prev.amount === fresh.amount &&
         prev.remarks === fresh.remarks &&
         prev.status === fresh.status &&
+        prev.confirmed_at === fresh.confirmed_at &&
+        prev.confirmed_by === fresh.confirmed_by &&
+        prev.utr_number === fresh.utr_number &&
+        prev.screenshot_url === fresh.screenshot_url &&
+        prev.rejection_reason === fresh.rejection_reason &&
         prev.is_active === fresh.is_active &&
         prev.upi_enabled === fresh.upi_enabled &&
         prev.bank_enabled === fresh.bank_enabled &&
         prev.upi_id === fresh.upi_id &&
         prev.upi_account_id === fresh.upi_account_id &&
-        JSON.stringify(prev.custom_bank_accounts || []) === JSON.stringify(fresh.custom_bank_accounts || []);
+        JSON.stringify(prev.custom_bank_accounts || []) === JSON.stringify(fresh.custom_bank_accounts || []) &&
+        (prev.submissions?.length || 0) === (fresh.submissions?.length || 0);
 
       if (isSame) return prev; // Do not trigger re-render if data is identical
 
@@ -152,7 +160,7 @@ export const PaymentCheckoutPage: React.FC = () => {
     const cleanId = (linkId || '').trim().replace(/\/$/, '');
     const cleanLowerId = cleanId.toLowerCase();
 
-    // 1. Listen ONLY when client/admin saves edited changes for this specific link
+    // 1. Listen when client/admin saves edited changes or confirms payment
     const handleEditSaved = (e: Event) => {
       const customEvt = e as CustomEvent<{ linkId?: string; updatedLink?: PaymentLink }>;
       const targetId = (customEvt.detail?.linkId || '').trim().toLowerCase();
@@ -166,7 +174,15 @@ export const PaymentCheckoutPage: React.FC = () => {
     };
     window.addEventListener('payment_link_edited_saved', handleEditSaved);
 
-    // 2. BroadcastChannel: Listen strictly for PAYMENT_LINK_EDIT_SAVED across tabs
+    // 2. Global portal updates & storage events (for instant real-time sync across tabs)
+    const handleGlobalUpdate = () => {
+      loadLinkData();
+    };
+    window.addEventListener('portal_accounts_updated', handleGlobalUpdate);
+    window.addEventListener('storage', handleGlobalUpdate);
+    window.addEventListener('focus', handleGlobalUpdate);
+
+    // 3. BroadcastChannel: Listen strictly for PAYMENT_LINK_EDIT_SAVED across tabs
     let channel: BroadcastChannel | null = null;
     try {
       channel = new BroadcastChannel('payment_portal_channel');
@@ -186,13 +202,16 @@ export const PaymentCheckoutPage: React.FC = () => {
       // Ignore
     }
 
-    // 3. Firestore snapshot for this single link (for cross-device synchronization)
+    // 4. Firestore snapshot for this single link (for cross-device synchronization)
     const unsubSingleLink = db.subscribeToPaymentLink(cleanId, (updatedLink) => {
       applyUpdatedLink(updatedLink);
     });
 
     return () => {
       window.removeEventListener('payment_link_edited_saved', handleEditSaved);
+      window.removeEventListener('portal_accounts_updated', handleGlobalUpdate);
+      window.removeEventListener('storage', handleGlobalUpdate);
+      window.removeEventListener('focus', handleGlobalUpdate);
       if (channel) {
         channel.close();
       }
@@ -230,23 +249,6 @@ export const PaymentCheckoutPage: React.FC = () => {
     navigate('/login');
   };
 
-  // Countdown when payment submitted successfully
-  useEffect(() => {
-    if (!submittedSuccess) return;
-    const interval = setInterval(() => {
-      setRedirectCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          triggerRedirect();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [submittedSuccess]);
-
   const handleCopy = async (key: string, text: string, label: string) => {
     const ok = await copyToClipboard(text);
     if (ok) {
@@ -280,7 +282,7 @@ export const PaymentCheckoutPage: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  // User requested: Screenshot is NOT mandatory, clicking "Done" submits and redirects immediately!
+  // User requested: Link is perpetual & reusable unlimited times
   const handleDonePayment = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!link) return;
@@ -293,18 +295,25 @@ export const PaymentCheckoutPage: React.FC = () => {
         db.savePaymentLink(link);
       }
 
-      await db.submitPaymentProof(link.id, {
+      const effectiveAmt = link.amount > 0 ? link.amount : (amtVal > 0 ? amtVal : 0);
+
+      const updated = await db.submitPaymentProof(link.id, {
         screenshot_url: screenshotData || '',
         utr_number: utrNumber.trim(),
+        amount: effectiveAmt,
       });
 
+      if (updated) {
+        setLink(updated);
+      }
       setSubmittedSuccess(true);
+      success('भुगतान पावती दर्ज!', 'आपकी पावती दर्ज हो गई है। यह लिंक हमेशा सक्रिय है — आप कभी भी नया भुगतान कर सकते हैं।');
+      setUtrNumber('');
+      setScreenshotData(null);
+      setShowOptionalDetails(false);
       loadLinkData();
     } catch {
-      error('Note', 'Processing payment status...');
-      setTimeout(() => {
-        triggerRedirect();
-      }, 800);
+      error('त्रुटि', 'पावती दर्ज नहीं हो सकी, कृपया पुनः प्रयास करें।');
     } finally {
       setIsSubmitting(false);
     }
@@ -465,9 +474,9 @@ export const PaymentCheckoutPage: React.FC = () => {
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
                 सुरक्षित डिजिटल ई-भुगतान | SECURE INSTANT UPI PAYMENT
               </span>
-              <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+              <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Verified
+                सक्रिय (Active Gateway)
               </span>
             </div>
 
@@ -510,82 +519,38 @@ export const PaymentCheckoutPage: React.FC = () => {
           </div>
 
           {/* ==================================================================== */}
-          {/* CASE 1: ALREADY PAID & SETTLED */}
+          {/* ALWAYS ACTIVE PAYMENT FLOW (PERPETUAL & REUSABLE UNLIMITED TIMES) */}
           {/* ==================================================================== */}
-          {link.status === 'Paid' && (
-            <div className="p-8 text-center space-y-4">
-              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto border border-emerald-300">
-                <Check className="w-8 h-8 stroke-[3]" />
-              </div>
-              <div className="space-y-1">
-                <h2 className="text-xl font-bold text-slate-900">भुगतान सफलतापूर्वक सत्यापित (Payment Settled)</h2>
-                <p className="text-xs text-slate-600 max-w-sm mx-auto">
-                  आपका {formatCurrency(link.amount)} का भुगतान सफलतापूर्वक प्राप्त और सत्यापित कर लिया गया है।
-                </p>
-              </div>
-
-              {link.confirmed_at && (
-                <div className="inline-flex items-center gap-1 text-xs text-slate-700 bg-slate-100 px-3 py-1 rounded border border-slate-300 font-mono">
-                  <span>दिनांक (Settled Date): {formatDate(link.confirmed_at)}</span>
+          <div className="p-4 sm:p-6 space-y-6">
+            {/* SUBMISSION CONFIRMATION NOTICE */}
+            {submittedSuccess && (
+              <div className="p-4 bg-emerald-50 border-2 border-emerald-400 rounded-lg flex items-start justify-between gap-3 shadow-xs">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <Check className="w-5 h-5 stroke-[3]" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-emerald-950">
+                      भुगतान पावती सफलतापूर्वक दर्ज हो गई! (Payment Proof Submitted)
+                    </h3>
+                    <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
+                      आपका भुगतान संदर्भ विभागीय मिलान हेतु दर्ज कर लिया गया है। यह लिंक हमेशा सक्रिय है — आप चाहें तो कभी भी पुनः भुगतान कर सकते हैं।
+                    </p>
+                  </div>
                 </div>
-              )}
-
-              <div className="pt-2 flex justify-center">
-                <Button
-                  size="sm"
-                  onClick={triggerRedirect}
-                  className="bg-[#0c2340] hover:bg-[#1a365d] text-white font-bold px-6"
-                  rightIcon={<ArrowRight className="w-4 h-4" />}
+                <button
+                  type="button"
+                  onClick={() => setSubmittedSuccess(false)}
+                  className="text-emerald-700 hover:text-emerald-950 text-xs font-bold px-2 py-1 bg-emerald-100/80 rounded cursor-pointer shrink-0"
                 >
-                  Return to Portal
-                </Button>
+                  ✕
+                </button>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* ==================================================================== */}
-          {/* CASE 2: PENDING CONFIRMATION / PROOF UNDER REVIEW */}
-          {/* ==================================================================== */}
-          {link.status === 'Pending Confirmation' && !submittedSuccess && (
-            <div className="p-8 text-center space-y-4">
-              <div className="w-14 h-14 rounded-full bg-blue-50 text-[#0c2340] flex items-center justify-center mx-auto border border-blue-300">
-                <ShieldCheck className="w-8 h-8" />
-              </div>
-              <div className="space-y-1">
-                <h2 className="text-xl font-bold text-slate-900">पावती दर्ज हो गई है (Verification In Progress)</h2>
-                <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
-                  आपके द्वारा भुगतान संदर्भ दर्ज कर दिया गया है। संबंधित विभाग द्वारा मिलान होते ही आपका चालान अद्यतन हो जाएगा।
-                </p>
-              </div>
-
-              {link.utr_number && (
-                <div className="inline-block bg-slate-100 border border-slate-300 rounded px-3 py-1 text-xs font-mono text-slate-800">
-                  संदर्भ संख्या (UTR Ref): <span className="font-bold">{link.utr_number}</span>
-                </div>
-              )}
-
-              <div className="pt-2 flex justify-center">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={triggerRedirect}
-                  className="text-xs text-slate-700"
-                >
-                  Return to Website
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* ==================================================================== */}
-          {/* CASE 3: ACTIVE PAYMENT FLOW (STRICT ORDER REQUESTED) */}
-          {/* 1st: SCANNER -> 2nd: UPI ID -> 3rd: UPI APPS -> 4th: BANK */}
-          {/* ==================================================================== */}
-          {link.status === 'Pending' && (
-            <div className="p-4 sm:p-6 space-y-6">
-              {/* ================================================================ */}
-              {/* 1ST PRIORITY: SCANNER (QR CODE) (SHOWN IF UPI ENABLED) */}
-              {/* ================================================================ */}
+            {/* ================================================================ */}
+            {/* 1ST PRIORITY: SCANNER (QR CODE) (SHOWN IF UPI ENABLED) */}
+            {/* ================================================================ */}
               {isUpiEnabled && (
                 <div className="border-2 border-slate-300 rounded-lg p-5 bg-white text-center space-y-3">
                   <div className="border-b border-slate-200 pb-2">
@@ -988,40 +953,7 @@ export const PaymentCheckoutPage: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
         </main>
-
-        {/* ==================================================================== */}
-        {/* SUCCESS MODAL / REDIRECT OVERLAY */}
-        {/* ==================================================================== */}
-        {submittedSuccess && (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-            <div className="bg-white border border-slate-300 rounded-lg max-w-sm w-full p-6 text-center space-y-4 shadow-xl">
-              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center mx-auto border border-emerald-300">
-                <Check className="w-8 h-8 stroke-[3]" />
-              </div>
-
-              <div className="space-y-1">
-                <h3 className="text-lg font-bold text-slate-900">भुगतान सफलतापूर्वक दर्ज (Payment Submitted)</h3>
-                <p className="text-xs text-slate-600">
-                  धन्यवाद! आपका भुगतान विवरण दर्ज कर लिया गया है।
-                </p>
-              </div>
-
-              <div className="p-2.5 bg-slate-100 rounded border border-slate-200 text-xs font-semibold text-slate-700 flex items-center justify-center gap-2">
-                <div className="w-3.5 h-3.5 border-2 border-[#0c2340] border-t-transparent rounded-full animate-spin" />
-                <span>Redirecting in {redirectCountdown}s...</span>
-              </div>
-
-              <Button
-                className="w-full bg-[#0c2340] hover:bg-[#1a365d] text-white font-bold py-2 rounded text-xs"
-                onClick={triggerRedirect}
-              >
-                Return to Website
-              </Button>
-            </div>
-          </div>
-        )}
 
         {/* ==================================================================== */}
         {/* OFFICIAL INSTITUTIONAL FOOTER */}

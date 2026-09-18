@@ -4,6 +4,7 @@ import {
   UpiAccount,
   Client,
   PaymentLink,
+  PaymentSubmission,
   ActivityLog,
   Settings,
   Transaction,
@@ -210,7 +211,28 @@ class DatabaseService {
           snapshot.forEach((docSnap) => {
             remoteLinks.push(docSnap.data() as PaymentLink);
           });
-          setStored(STORAGE_KEYS.PAYMENT_LINKS, remoteLinks);
+          if (remoteLinks.length > 0) {
+            const linkMap = new Map<string, PaymentLink>();
+            for (const item of remoteLinks) {
+              const key = (item.id || '').trim().toLowerCase().replace(/\/$/, '');
+              if (!linkMap.has(key)) {
+                linkMap.set(key, item);
+              } else {
+                const existing = linkMap.get(key)!;
+                const existingTime = new Date(existing.confirmed_at || existing.submitted_at || existing.created_at).getTime();
+                const itemTime = new Date(item.confirmed_at || item.submitted_at || item.created_at).getTime();
+                if (itemTime >= existingTime) {
+                  linkMap.set(key, item);
+                }
+              }
+            }
+            const deduped = Array.from(linkMap.values()).sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+            setStored(STORAGE_KEYS.PAYMENT_LINKS, deduped);
+          } else {
+            setStored(STORAGE_KEYS.PAYMENT_LINKS, remoteLinks);
+          }
           callback();
         },
         (err) => console.warn('Firestore realtime payment links error:', err)
@@ -318,6 +340,50 @@ class DatabaseService {
       }
     }
     return localClients;
+  }
+
+  public async syncPaymentLinksFromCloud(): Promise<PaymentLink[]> {
+    let localLinks = this.getPaymentLinks();
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const snap = await getDocs(collection(firestoreDb, 'payment_links'));
+        const remoteLinks: PaymentLink[] = [];
+        snap.forEach((docSnap) => {
+          remoteLinks.push(docSnap.data() as PaymentLink);
+        });
+
+        if (remoteLinks.length > 0) {
+          const linkMap = new Map<string, PaymentLink>();
+          for (const item of remoteLinks) {
+            const key = (item.id || '').trim().toLowerCase().replace(/\/$/, '');
+            if (!linkMap.has(key)) {
+              linkMap.set(key, item);
+            } else {
+              const existing = linkMap.get(key)!;
+              const existingTime = new Date(existing.confirmed_at || existing.submitted_at || existing.created_at).getTime();
+              const itemTime = new Date(item.confirmed_at || item.submitted_at || item.created_at).getTime();
+              if (itemTime >= existingTime) {
+                linkMap.set(key, item);
+              }
+            }
+          }
+          // Also merge any local-only links that haven't been pushed
+          for (const l of localLinks) {
+            const key = (l.id || '').trim().toLowerCase().replace(/\/$/, '');
+            if (!linkMap.has(key)) {
+              linkMap.set(key, l);
+            }
+          }
+          localLinks = Array.from(linkMap.values()).sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+          setStored(STORAGE_KEYS.PAYMENT_LINKS, localLinks);
+        }
+      } catch (err) {
+        console.warn('Firebase Firestore payment links sync failed:', err);
+      }
+    }
+    return localLinks;
   }
 
   public async syncAccountsFromCloud(): Promise<{ banks: BankAccount[]; upis: UpiAccount[] }> {
@@ -1296,40 +1362,137 @@ class DatabaseService {
 
   public async submitPaymentProof(
     linkId: string,
-    data: { screenshot_url?: string; utr_number?: string }
+    data: { screenshot_url?: string; utr_number?: string; amount?: number; method?: string }
   ): Promise<PaymentLink | null> {
     const links = getStored<PaymentLink[]>(STORAGE_KEYS.PAYMENT_LINKS, []);
-    const cleanId = linkId.trim().toLowerCase().replace(/\/$/, '');
-    const index = links.findIndex((l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanId);
-    if (index === -1) return null;
+    const cleanExactId = linkId.trim().replace(/\/$/, '');
+    const cleanLowerId = cleanExactId.toLowerCase();
+    let index = links.findIndex(
+      (l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanLowerId || l.id === cleanExactId
+    );
 
-    links[index] = {
-      ...links[index],
-      status: 'Pending Confirmation',
-      screenshot_url: data.screenshot_url || '',
+    if (index === -1 && isFirebaseConfigured() && firestoreDb) {
+      try {
+        let snap = await getDoc(doc(firestoreDb, 'payment_links', cleanExactId));
+        if (!snap.exists() && cleanExactId !== cleanLowerId) {
+          snap = await getDoc(doc(firestoreDb, 'payment_links', cleanLowerId));
+        }
+        if (snap.exists()) {
+          const remoteLink = snap.data() as PaymentLink;
+          links.unshift(remoteLink);
+          index = 0;
+        }
+      } catch (err) {
+        console.warn('Firebase fetch before proof submit error:', err);
+      }
+    }
+
+    if (index === -1) {
+      const fallbackLink: PaymentLink = {
+        id: cleanExactId,
+        client_id: 'client',
+        client_name: 'Client',
+        amount: data.amount || 0,
+        status: 'Pending Confirmation',
+        remarks: 'Payment Request',
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+      links.unshift(fallbackLink);
+      index = 0;
+    }
+
+    const currentLink = links[index];
+    const nowIso = new Date().toISOString();
+
+    const newSubmission: PaymentSubmission = {
+      id: `sub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      amount: data.amount || currentLink.amount,
       utr_number: data.utr_number || '',
-      submitted_at: new Date().toISOString(),
+      screenshot_url: data.screenshot_url || '',
+      submitted_at: nowIso,
+      status: 'Pending Confirmation',
+      method: data.method || 'UPI',
     };
 
+    let existingSubmissions = Array.isArray(currentLink.submissions) ? [...currentLink.submissions] : [];
+    // If submissions array was empty but link already had an existing submission/confirmation, preserve it:
+    if (existingSubmissions.length === 0 && (currentLink.utr_number || currentLink.screenshot_url)) {
+      existingSubmissions.push({
+        id: `sub_prev_${currentLink.id}`,
+        amount: currentLink.last_paid_amount || currentLink.amount,
+        utr_number: currentLink.utr_number || '',
+        screenshot_url: currentLink.screenshot_url || '',
+        submitted_at: currentLink.submitted_at || currentLink.created_at,
+        status: currentLink.status || 'Pending Confirmation',
+        confirmed_at: currentLink.confirmed_at,
+        confirmed_by: currentLink.confirmed_by,
+        rejection_reason: currentLink.rejection_reason,
+        method: 'UPI',
+      });
+    }
+
+    const updatedSubmissions = [newSubmission, ...existingSubmissions];
+
+    const updated: PaymentLink = {
+      ...currentLink,
+      status: 'Pending Confirmation',
+      screenshot_url: data.screenshot_url || currentLink.screenshot_url || '',
+      utr_number: data.utr_number || currentLink.utr_number || '',
+      submitted_at: nowIso,
+      submissions: updatedSubmissions,
+      last_paid_amount: data.amount || currentLink.amount,
+      is_active: true, // ALWAYS KEEP ACTIVE
+    };
+
+    links[index] = updated;
     setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
     this.notifyChange('PAYMENT_LINKS');
 
-    if (isFirebaseConfigured() && firestoreDb) {
-      setDoc(doc(firestoreDb, 'payment_links', links[index].id), links[index], { merge: true }).catch((err) =>
-        console.warn('Firebase link update error:', err)
+    try {
+      const channel = new BroadcastChannel('payment_portal_channel');
+      channel.postMessage({
+        type: 'PAYMENT_LINK_EDIT_SAVED',
+        linkId: updated.id,
+        updatedLink: updated,
+      });
+      channel.close();
+    } catch {
+      // Ignore
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('payment_link_edited_saved', {
+          detail: { linkId: updated.id, updatedLink: updated },
+        })
       );
     }
 
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const cleanPayload = Object.fromEntries(
+          Object.entries(updated).filter(([_, v]) => v !== undefined)
+        );
+        await setDoc(doc(firestoreDb, 'payment_links', updated.id), cleanPayload, { merge: true });
+        if (updated.id.toLowerCase() !== updated.id) {
+          await setDoc(doc(firestoreDb, 'payment_links', updated.id.toLowerCase()), cleanPayload, { merge: true }).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Firebase link update error:', err);
+      }
+    }
+
     await this.logAction(
-      links[index].client_name || 'Client',
+      updated.client_name || 'Client',
       'Payment Submitted',
-      `Client marked payment as completed for ₹${links[index].amount.toLocaleString('en-IN')}${
+      `Client submitted payment proof for ₹${(data.amount || updated.amount).toLocaleString('en-IN')}${
         data.utr_number ? ` (Ref/UTR: ${data.utr_number})` : ''
-      }${data.screenshot_url ? ' with screenshot proof' : ' (direct confirmation)'}. Awaiting admin review.`,
-      links[index].client_id || 'client'
+      }. Awaiting admin review.`,
+      updated.client_id || 'client'
     );
 
-    return links[index];
+    return updated;
   }
 
   public async confirmPaymentLink(
@@ -1338,15 +1501,54 @@ class DatabaseService {
     actorId: string = 'admin'
   ): Promise<PaymentLink | null> {
     const links = getStored<PaymentLink[]>(STORAGE_KEYS.PAYMENT_LINKS, []);
-    const index = links.findIndex((l) => l.id === linkId);
+    const cleanExactId = linkId.trim().replace(/\/$/, '');
+    const cleanLowerId = cleanExactId.toLowerCase();
+    let index = links.findIndex(
+      (l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanLowerId || l.id === cleanExactId
+    );
+
+    if (index === -1 && isFirebaseConfigured() && firestoreDb) {
+      try {
+        let snap = await getDoc(doc(firestoreDb, 'payment_links', cleanExactId));
+        if (!snap.exists() && cleanExactId !== cleanLowerId) {
+          snap = await getDoc(doc(firestoreDb, 'payment_links', cleanLowerId));
+        }
+        if (snap.exists()) {
+          const remoteLink = snap.data() as PaymentLink;
+          links.unshift(remoteLink);
+          index = 0;
+        }
+      } catch (err) {
+        console.warn('Firebase confirm find link error:', err);
+      }
+    }
+
     if (index === -1) return null;
 
     const link = links[index];
+    const nowIso = new Date().toISOString();
+
+    const updatedSubmissions = (link.submissions || []).map((sub, i) => {
+      if (i === 0 || sub.status === 'Pending Confirmation') {
+        return {
+          ...sub,
+          status: 'Paid' as const,
+          confirmed_at: nowIso,
+          confirmed_by: actorName,
+        };
+      }
+      return sub;
+    });
+
+    const settledAmount = link.last_paid_amount || link.amount;
+
     const updated: PaymentLink = {
       ...link,
       status: 'Paid',
-      confirmed_at: new Date().toISOString(),
+      confirmed_at: nowIso,
       confirmed_by: actorName,
+      submissions: updatedSubmissions,
+      is_active: true, // Link stays continuously active
     };
     links[index] = updated;
     setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
@@ -1357,19 +1559,59 @@ class DatabaseService {
       id: `tx_${Date.now()}`,
       client_id: link.client_id,
       client_name: link.client_name || 'Client',
-      amount: link.amount,
+      amount: settledAmount,
       method: 'UPI',
       destination_name: link.upi_id || 'Authorized UPI Account',
       reference_no: link.utr_number || `UPI-${Date.now().toString().slice(-8)}`,
       status: 'Completed',
-      created_at: new Date().toISOString(),
+      created_at: nowIso,
     };
     setStored(STORAGE_KEYS.TRANSACTIONS, [newTx, ...transactions]);
+
+    // CRITICAL: Notify UI & Broadcast across all tabs
+    this.notifyChange('PAYMENT_LINKS');
+    this.notifyChange('TRANSACTIONS');
+
+    try {
+      const channel = new BroadcastChannel('payment_portal_channel');
+      channel.postMessage({
+        type: 'PAYMENT_LINK_EDIT_SAVED',
+        linkId: link.id,
+        updatedLink: updated,
+      });
+      channel.close();
+    } catch {
+      // Ignore
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('payment_link_edited_saved', {
+          detail: { linkId: link.id, updatedLink: updated },
+        })
+      );
+    }
+
+    // CRITICAL: Write to Firestore so real-time listeners and checkouts get the update
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const cleanPayload = Object.fromEntries(
+          Object.entries(updated).filter(([_, v]) => v !== undefined)
+        );
+        await setDoc(doc(firestoreDb, 'payment_links', link.id), cleanPayload, { merge: true });
+        if (link.id.toLowerCase() !== link.id) {
+          await setDoc(doc(firestoreDb, 'payment_links', link.id.toLowerCase()), cleanPayload, { merge: true }).catch(() => {});
+        }
+        await setDoc(doc(firestoreDb, 'transactions', newTx.id), newTx).catch(() => {});
+      } catch (e) {
+        console.warn('Firebase confirmPaymentLink error:', e);
+      }
+    }
 
     await this.logAction(
       actorName,
       'Payment Link Confirmed',
-      `Confirmed payment of ₹${link.amount.toLocaleString('en-IN')} for ${link.client_name || 'Client'}`,
+      `Confirmed payment of ₹${settledAmount.toLocaleString('en-IN')} for ${link.client_name || 'Client'} (UTR: ${link.utr_number || 'N/A'})`,
       actorId
     );
 
@@ -1383,17 +1625,89 @@ class DatabaseService {
     actorId: string = 'admin'
   ): Promise<PaymentLink | null> {
     const links = getStored<PaymentLink[]>(STORAGE_KEYS.PAYMENT_LINKS, []);
-    const index = links.findIndex((l) => l.id === linkId);
+    const cleanExactId = linkId.trim().replace(/\/$/, '');
+    const cleanLowerId = cleanExactId.toLowerCase();
+    let index = links.findIndex(
+      (l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanLowerId || l.id === cleanExactId
+    );
+
+    if (index === -1 && isFirebaseConfigured() && firestoreDb) {
+      try {
+        let snap = await getDoc(doc(firestoreDb, 'payment_links', cleanExactId));
+        if (!snap.exists() && cleanExactId !== cleanLowerId) {
+          snap = await getDoc(doc(firestoreDb, 'payment_links', cleanLowerId));
+        }
+        if (snap.exists()) {
+          const remoteLink = snap.data() as PaymentLink;
+          links.unshift(remoteLink);
+          index = 0;
+        }
+      } catch (err) {
+        console.warn('Firebase reject find link error:', err);
+      }
+    }
+
     if (index === -1) return null;
 
     const link = links[index];
+    const nowIso = new Date().toISOString();
+
+    const updatedSubmissions = (link.submissions || []).map((sub, i) => {
+      if (i === 0 || sub.status === 'Pending Confirmation') {
+        return {
+          ...sub,
+          status: 'Rejected' as const,
+          rejection_reason: reason,
+        };
+      }
+      return sub;
+    });
+
     const updated: PaymentLink = {
       ...link,
       status: 'Rejected',
       rejection_reason: reason,
+      submissions: updatedSubmissions,
+      is_active: true, // Link stays continuously active
     };
     links[index] = updated;
     setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
+
+    this.notifyChange('PAYMENT_LINKS');
+
+    try {
+      const channel = new BroadcastChannel('payment_portal_channel');
+      channel.postMessage({
+        type: 'PAYMENT_LINK_EDIT_SAVED',
+        linkId: link.id,
+        updatedLink: updated,
+      });
+      channel.close();
+    } catch {
+      // Ignore
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('payment_link_edited_saved', {
+          detail: { linkId: link.id, updatedLink: updated },
+        })
+      );
+    }
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const cleanPayload = Object.fromEntries(
+          Object.entries(updated).filter(([_, v]) => v !== undefined)
+        );
+        await setDoc(doc(firestoreDb, 'payment_links', link.id), cleanPayload, { merge: true });
+        if (link.id.toLowerCase() !== link.id) {
+          await setDoc(doc(firestoreDb, 'payment_links', link.id.toLowerCase()), cleanPayload, { merge: true }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Firebase rejectPaymentLink error:', e);
+      }
+    }
 
     await this.logAction(
       actorName,

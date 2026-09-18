@@ -28,13 +28,13 @@ import { QRCodeDisplay } from '../../components/QRCodeDisplay';
 import { formatCurrency, formatDate } from '../../lib/utils';
 
 interface BankAndUpiPageProps {
-  defaultTab?: 'banks' | 'upis';
+  defaultTab?: 'all' | 'banks' | 'upis';
 }
 
-export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'banks' }) => {
+export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'all' }) => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = (searchParams.get('tab') as 'banks' | 'upis') || defaultTab;
-  const [activeTab, setActiveTab] = useState<'banks' | 'upis'>(initialTab);
+  const initialTab = (searchParams.get('tab') as 'all' | 'banks' | 'upis') || defaultTab;
+  const [activeTab, setActiveTab] = useState<'all' | 'banks' | 'upis'>(initialTab);
 
   const { user } = useAuth();
   const { success, error } = useToast();
@@ -42,12 +42,12 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
   // Keep state synced with query params
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    if (tabParam === 'banks' || tabParam === 'upis') {
+    if (tabParam === 'all' || tabParam === 'banks' || tabParam === 'upis') {
       setActiveTab(tabParam);
     }
   }, [searchParams]);
 
-  const switchTab = (tab: 'banks' | 'upis') => {
+  const switchTab = (tab: 'all' | 'banks' | 'upis') => {
     setActiveTab(tab);
     setSearchParams({ tab });
   };
@@ -628,143 +628,115 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
-          {activeTab === 'banks' ? (
-            <Button onClick={openAddBankModal} leftIcon={<Plus className="w-4 h-4" />}>
-              Add Bank Account
-            </Button>
-          ) : (
-            <Button onClick={openAddUpiModal} leftIcon={<Plus className="w-4 h-4" />}>
-              Add UPI ID
-            </Button>
-          )}
+          <Button onClick={openAddUpiModal} leftIcon={<Plus className="w-4 h-4" />}>
+            Add UPI ID
+          </Button>
+          <Button variant="outline" onClick={openAddBankModal} leftIcon={<Plus className="w-4 h-4" />}>
+            Add Bank Account
+          </Button>
         </div>
       </div>
 
-      {/* Tab Navigation Pill Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-2">
+      {/* View Switcher / Filter Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div className="flex items-center gap-2">
           <button
-            id="tab-btn-banks"
-            onClick={() => switchTab('banks')}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all ${
-              activeTab === 'banks'
+            id="tab-btn-all"
+            onClick={() => switchTab('all')}
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+              activeTab === 'all'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
             }`}
           >
-            <Building2 className="w-4 h-4" />
-            <span>Bank Accounts</span>
+            <CreditCard className="w-4 h-4" />
+            <span>All on One Page (सभी एक साथ)</span>
             <span
               className={`text-[11px] px-1.5 py-0.2 rounded-full font-bold ${
-                activeTab === 'banks' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-600'
+                activeTab === 'all' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-600'
               }`}
             >
-              {bankAccounts.length}
+              {bankAccounts.length + upiAccounts.length}
             </span>
           </button>
 
           <button
             id="tab-btn-upis"
             onClick={() => switchTab('upis')}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all ${
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
               activeTab === 'upis'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <QrCode className="w-4 h-4" />
-            <span>UPI IDs & QR</span>
-            <span
-              className={`text-[11px] px-1.5 py-0.2 rounded-full font-bold ${
-                activeTab === 'upis' ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {upiAccounts.length}
-            </span>
+            <span>UPI IDs & QR ({upiAccounts.length})</span>
+          </button>
+
+          <button
+            id="tab-btn-banks"
+            onClick={() => switchTab('banks')}
+            className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-all ${
+              activeTab === 'banks'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
+            }`}
+          >
+            <Building2 className="w-4 h-4" />
+            <span>Bank Accounts ({bankAccounts.length})</span>
           </button>
         </div>
 
         {/* Quick Active Indicators */}
         <div className="flex items-center gap-4 text-xs text-slate-500">
           <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span>
-              <strong className="text-slate-700">{activeBanksCount}</strong> Active Banks
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
             <span>
               <strong className="text-slate-700">{activeUpisCount}</strong> Active UPIs
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>
+              <strong className="text-slate-700">{activeBanksCount}</strong> Active Banks
             </span>
           </div>
         </div>
       </div>
 
       {/* ==================================================== */}
-      {/* TAB 1: BANK ACCOUNTS */}
+      {/* SECTION 1: UPI ACCOUNTS & QR CODES */}
       {/* ==================================================== */}
-      {activeTab === 'banks' && (
-        <div className="space-y-4">
-          {/* Search & Status Filter */}
-          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-white p-4 rounded-xl border border-slate-200">
-            <div className="w-full sm:w-80">
-              <Input
-                placeholder="Search bank, account #, or IFSC..."
-                value={bankSearch}
-                onChange={(e) => {
-                  setBankSearch(e.target.value);
-                  setBankPage(1);
-                }}
-                leftIcon={<Search className="w-4 h-4" />}
-              />
-            </div>
-            <div className="flex items-center gap-2 self-start sm:self-auto">
-              <span className="text-xs font-medium text-slate-500">Status:</span>
-              <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-medium text-slate-600">
-                {(['all', 'active', 'inactive'] as const).map((st) => (
-                  <button
-                    key={st}
-                    onClick={() => {
-                      setBankStatusFilter(st);
-                      setBankPage(1);
-                    }}
-                    className={`px-3 py-1 rounded-md capitalize transition-colors ${
-                      bankStatusFilter === st
-                        ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                        : 'hover:text-slate-900'
-                    }`}
-                  >
-                    {st}
-                  </button>
-                ))}
+      {(activeTab === 'all' || activeTab === 'upis') && (
+        <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600">
+                <QrCode className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <span>UPI IDs & QR Codes</span>
+                  <Badge variant="neutral">{filteredUpis.length} accounts</Badge>
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Instant UPI payment IDs, QR codes, and application routing for client checkouts.
+                </p>
               </div>
             </div>
+
+            <Button
+              size="sm"
+              onClick={openAddUpiModal}
+              leftIcon={<Plus className="w-3.5 h-3.5" />}
+              className="self-start sm:self-auto bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              Add UPI ID
+            </Button>
           </div>
 
-          {/* Table */}
-          <Table
-            data={filteredBanks}
-            columns={bankColumns}
-            keyExtractor={(item) => item.id}
-            pageSize={8}
-            currentPage={bankPage}
-            onPageChange={setBankPage}
-            onSort={handleBankSort}
-            sortKey={bankSortKey}
-            sortOrder={bankSortOrder}
-            emptyMessage="No bank accounts match your search criteria."
-          />
-        </div>
-      )}
-
-      {/* ==================================================== */}
-      {/* TAB 2: UPI ACCOUNTS */}
-      {/* ==================================================== */}
-      {activeTab === 'upis' && (
-        <div className="space-y-4">
           {/* Search & Status Filter */}
-          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-white p-4 rounded-xl border border-slate-200">
+          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
             <div className="w-full sm:w-80">
               <Input
                 placeholder="Search UPI ID or app..."
@@ -778,7 +750,7 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
             </div>
             <div className="flex items-center gap-2 self-start sm:self-auto">
               <span className="text-xs font-medium text-slate-500">Status:</span>
-              <div className="flex bg-slate-100 p-0.5 rounded-lg text-xs font-medium text-slate-600">
+              <div className="flex bg-white border border-slate-200 p-0.5 rounded-lg text-xs font-medium text-slate-600">
                 {(['all', 'active', 'inactive'] as const).map((st) => (
                   <button
                     key={st}
@@ -788,7 +760,7 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
                     }}
                     className={`px-3 py-1 rounded-md capitalize transition-colors ${
                       upiStatusFilter === st
-                        ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                        ? 'bg-indigo-600 text-white shadow-xs font-semibold'
                         : 'hover:text-slate-900'
                     }`}
                   >
@@ -811,6 +783,89 @@ export const BankAndUpiPage: React.FC<BankAndUpiPageProps> = ({ defaultTab = 'ba
             sortKey={upiSortKey}
             sortOrder={upiSortOrder}
             emptyMessage="No UPI IDs match your search criteria."
+          />
+        </div>
+      )}
+
+      {/* ==================================================== */}
+      {/* SECTION 2: BANK ACCOUNTS */}
+      {/* ==================================================== */}
+      {(activeTab === 'all' || activeTab === 'banks') && (
+        <div className="space-y-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600">
+                <Building2 className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <span>Bank Settlement Accounts</span>
+                  <Badge variant="neutral">{filteredBanks.length} accounts</Badge>
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Bank accounts for NEFT, RTGS, IMPS, and direct net banking transfers.
+                </p>
+              </div>
+            </div>
+
+            <Button
+              size="sm"
+              onClick={openAddBankModal}
+              leftIcon={<Plus className="w-3.5 h-3.5" />}
+              className="self-start sm:self-auto bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              Add Bank Account
+            </Button>
+          </div>
+
+          {/* Search & Status Filter */}
+          <div className="flex flex-col sm:flex-row gap-3 items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
+            <div className="w-full sm:w-80">
+              <Input
+                placeholder="Search bank, account #, or IFSC..."
+                value={bankSearch}
+                onChange={(e) => {
+                  setBankSearch(e.target.value);
+                  setBankPage(1);
+                }}
+                leftIcon={<Search className="w-4 h-4" />}
+              />
+            </div>
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <span className="text-xs font-medium text-slate-500">Status:</span>
+              <div className="flex bg-white border border-slate-200 p-0.5 rounded-lg text-xs font-medium text-slate-600">
+                {(['all', 'active', 'inactive'] as const).map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => {
+                      setBankStatusFilter(st);
+                      setBankPage(1);
+                    }}
+                    className={`px-3 py-1 rounded-md capitalize transition-colors ${
+                      bankStatusFilter === st
+                        ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                        : 'hover:text-slate-900'
+                    }`}
+                  >
+                    {st}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Table */}
+          <Table
+            data={filteredBanks}
+            columns={bankColumns}
+            keyExtractor={(item) => item.id}
+            pageSize={8}
+            currentPage={bankPage}
+            onPageChange={setBankPage}
+            onSort={handleBankSort}
+            sortKey={bankSortKey}
+            sortOrder={bankSortOrder}
+            emptyMessage="No bank accounts match your search criteria."
           />
         </div>
       )}
