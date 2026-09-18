@@ -24,16 +24,10 @@ export function buildPaymentLinkUrl(link: {
 }): string {
   const origin = window.location.origin;
   const cleanId = (link.id || '').trim().replace(/\/$/, '');
-  const params = new URLSearchParams();
-  if (link.amount) params.set('amt', link.amount.toString());
-  if (link.upi_id) params.set('upi', link.upi_id);
-  if (link.client_name) params.set('cli', link.client_name);
-  if (link.remarks) params.set('rem', link.remarks);
-  if (link.upi_account_id) params.set('acc', link.upi_account_id);
-  if (link.redirect_url) params.set('red', link.redirect_url);
-
-  const query = params.toString();
-  return `${origin}/pay/${cleanId}${query ? `?${query}` : ''}`;
+  // Generate super short and clean URL: origin/pay/{id}
+  // Client name is completely excluded to protect privacy.
+  // In pure database-backed mode, the ID alone is sufficient!
+  return `${origin}/pay/${cleanId}`;
 }
 
 export function formatDate(dateString: string): string {

@@ -22,6 +22,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   setDoc,
   deleteDoc,
@@ -108,22 +109,18 @@ class DatabaseService {
       setStored(STORAGE_KEYS.SETTINGS, INITIAL_SETTINGS);
     }
 
-    // Seed Payment Links
-    const existingLinks = getStored<PaymentLink[]>(STORAGE_KEYS.PAYMENT_LINKS, []);
-    if (existingLinks.length === 0) {
-      setStored(STORAGE_KEYS.PAYMENT_LINKS, INITIAL_PAYMENT_LINKS);
-    }
-
-    // Seed Activity Logs
-    const existingLogs = getStored<ActivityLog[]>(STORAGE_KEYS.ACTIVITY_LOGS, []);
-    if (existingLogs.length === 0) {
-      setStored(STORAGE_KEYS.ACTIVITY_LOGS, INITIAL_ACTIVITY_LOGS);
-    }
-
-    // Seed Transactions
-    const existingTx = getStored<Transaction[]>(STORAGE_KEYS.TRANSACTIONS, []);
-    if (existingTx.length === 0) {
-      setStored(STORAGE_KEYS.TRANSACTIONS, INITIAL_TRANSACTIONS);
+    // Clean fresh start: Clear any previous test payment links, activity logs, and transactions, keeping bank accounts, upi accounts, and clients intact
+    const FRESH_VERSION_KEY = 'portal_fresh_state_v3';
+    if (!localStorage.getItem(FRESH_VERSION_KEY)) {
+      setStored(STORAGE_KEYS.PAYMENT_LINKS, []);
+      setStored(STORAGE_KEYS.ACTIVITY_LOGS, []);
+      setStored(STORAGE_KEYS.TRANSACTIONS, []);
+      try {
+        localStorage.setItem(FRESH_VERSION_KEY, 'true');
+      } catch {
+        // Ignore
+      }
+      this.purgeAllTransactionalData().catch((e) => console.warn('Purge error:', e));
     }
 
     this.initialized = true;
@@ -206,13 +203,88 @@ class DatabaseService {
         (err) => console.warn('Firestore realtime clients error:', err)
       );
 
+      const unsubLinks = onSnapshot(
+        collection(firestoreDb, 'payment_links'),
+        (snapshot) => {
+          const remoteLinks: PaymentLink[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteLinks.push(docSnap.data() as PaymentLink);
+          });
+          setStored(STORAGE_KEYS.PAYMENT_LINKS, remoteLinks);
+          callback();
+        },
+        (err) => console.warn('Firestore realtime payment links error:', err)
+      );
+
+      const unsubTx = onSnapshot(
+        collection(firestoreDb, 'transactions'),
+        (snapshot) => {
+          const remoteTx: Transaction[] = [];
+          snapshot.forEach((docSnap) => {
+            remoteTx.push(docSnap.data() as Transaction);
+          });
+          setStored(STORAGE_KEYS.TRANSACTIONS, remoteTx);
+          callback();
+        },
+        (err) => console.warn('Firestore realtime transactions error:', err)
+      );
+
       return () => {
         unsubBanks();
         unsubUpis();
         unsubClients();
+        unsubLinks();
+        unsubTx();
       };
     } catch (e) {
       console.warn('Failed to attach firestore realtime listener:', e);
+      return () => {};
+    }
+  }
+
+  // Subscribe directly to a single payment link document for instant, zero-latency live updates
+  public subscribeToPaymentLink(linkId: string, callback: (link: PaymentLink) => void): () => void {
+    if (!linkId) return () => {};
+    const cleanExactId = linkId.trim().replace(/\/$/, '');
+    const cleanLowerId = cleanExactId.toLowerCase();
+
+    if (!isFirebaseConfigured() || !firestoreDb) {
+      return () => {};
+    }
+
+    let lastKnownHash = '';
+
+    try {
+      const unsub = onSnapshot(
+        doc(firestoreDb, 'payment_links', cleanExactId),
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data() as PaymentLink;
+            const currentHash = `${data.amount}_${data.remarks}_${data.status}_${data.is_active}_${data.upi_enabled}_${data.bank_enabled}_${data.upi_id}_${data.upi_account_id}_${JSON.stringify(data.custom_bank_accounts || [])}`;
+            if (currentHash === lastKnownHash) {
+              return; // Guard: No actual field changes, prevent unnecessary callback
+            }
+            lastKnownHash = currentHash;
+
+            // Silently update local store without triggering broad event storms
+            const links = this.getPaymentLinks();
+            const idx = links.findIndex(
+              (l) => l.id.trim().toLowerCase() === cleanLowerId || l.id === data.id
+            );
+            if (idx >= 0) {
+              links[idx] = { ...links[idx], ...data };
+            } else {
+              links.unshift(data);
+            }
+            setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
+            callback(data);
+          }
+        },
+        (err) => console.warn('Firestore live link subscription warning:', err)
+      );
+      return unsub;
+    } catch (e) {
+      console.warn('Failed to subscribe to payment link document:', e);
       return () => {};
     }
   }
@@ -912,6 +984,46 @@ class DatabaseService {
     );
   }
 
+  public async fetchPaymentLinkById(id: string): Promise<PaymentLink | null> {
+    if (!id) return null;
+    const cleanExactId = id.trim().replace(/\/$/, '');
+    const cleanLowerId = cleanExactId.toLowerCase();
+
+    // 1. Check Firebase Firestore FIRST for live cloud-synchronized data
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        let docSnap = await getDoc(doc(firestoreDb, 'payment_links', cleanExactId));
+        if (!docSnap.exists() && cleanExactId !== cleanLowerId) {
+          docSnap = await getDoc(doc(firestoreDb, 'payment_links', cleanLowerId));
+        }
+        if (docSnap.exists()) {
+          const remoteLink = docSnap.data() as PaymentLink;
+          // Silently cache in local memory without firing notifications or writing back to Firestore
+          const links = this.getPaymentLinks();
+          const cleanId = remoteLink.id.trim().toLowerCase().replace(/\/$/, '');
+          const existingIndex = links.findIndex(
+            (l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanId
+          );
+          if (existingIndex >= 0) {
+            links[existingIndex] = { ...links[existingIndex], ...remoteLink };
+          } else {
+            links.unshift(remoteLink);
+          }
+          setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
+          return remoteLink;
+        }
+      } catch (err) {
+        console.warn('Firebase fetchPaymentLinkById error:', err);
+      }
+    }
+
+    // 2. Fall back to local storage cache
+    const local = this.getPaymentLinkById(id);
+    if (local) return local;
+
+    return null;
+  }
+
   public savePaymentLink(link: PaymentLink): void {
     const links = this.getPaymentLinks();
     const cleanId = link.id.trim().toLowerCase().replace(/\/$/, '');
@@ -923,6 +1035,25 @@ class DatabaseService {
     } else {
       setStored(STORAGE_KEYS.PAYMENT_LINKS, [link, ...links]);
     }
+    this.notifyChange('PAYMENT_LINKS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      setDoc(doc(firestoreDb, 'payment_links', link.id), link, { merge: true }).catch((e) =>
+        console.warn('Firebase savePaymentLink error:', e)
+      );
+    }
+  }
+
+  public savePaymentLinkSilently(link: PaymentLink): void {
+    const links = this.getPaymentLinks();
+    const cleanId = link.id.trim().toLowerCase().replace(/\/$/, '');
+    const existingIndex = links.findIndex((l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanId);
+    if (existingIndex >= 0) {
+      links[existingIndex] = { ...links[existingIndex], ...link };
+    } else {
+      links.unshift(link);
+    }
+    setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
   }
 
   public async deletePaymentLink(
@@ -960,7 +1091,14 @@ class DatabaseService {
     actorName: string = 'Admin',
     actorId: string = 'admin',
     redirectUrl?: string,
-    upiAccountId?: string
+    upiAccountId?: string,
+    linkType: 'one_time' | 'live' = 'one_time',
+    options?: {
+      upi_enabled?: boolean;
+      bank_enabled?: boolean;
+      custom_upi_id?: string;
+      custom_bank_accounts?: BankAccount[];
+    }
   ): Promise<PaymentLink> {
     const client = this.getClientById(clientId);
     const upiAccounts = this.getActiveUpiAccounts();
@@ -968,16 +1106,26 @@ class DatabaseService {
       ? upiAccounts.find((u) => u.id === upiAccountId)
       : upiAccounts[0];
 
-    const upiIdToUse = selectedUpi?.upi_id || (upiAccounts[0]?.upi_id || 'payments@upi');
+    const upiIdToUse = options?.custom_upi_id || selectedUpi?.upi_id || (upiAccounts[0]?.upi_id || 'payments@upi');
+
+    // Generate ultra short, unique and clean link ID (e.g. 'p7x2k9', 'k8m3w4')
+    const shortRandom = Math.random().toString(36).substring(2, 8);
+    const shortId = `p${shortRandom}`;
 
     const newLink: PaymentLink = {
-      id: `pl_${Date.now()}`,
+      id: shortId,
       client_id: clientId,
       client_name: client?.full_name || 'Client',
       amount,
       status: 'Pending',
       remarks: remarks || 'Payment Request',
-      upi_account_id: selectedUpi?.id,
+      link_type: linkType,
+      is_active: true,
+      upi_enabled: options?.upi_enabled !== undefined ? options.upi_enabled : true,
+      bank_enabled: options?.bank_enabled !== undefined ? options.bank_enabled : true,
+      custom_upi_id: options?.custom_upi_id || '',
+      custom_bank_accounts: options?.custom_bank_accounts || [],
+      upi_account_id: selectedUpi?.id || '',
       upi_id: upiIdToUse,
       redirect_url: redirectUrl || '',
       created_at: new Date().toISOString(),
@@ -985,15 +1133,165 @@ class DatabaseService {
 
     const currentLinks = this.getPaymentLinks();
     setStored(STORAGE_KEYS.PAYMENT_LINKS, [newLink, ...currentLinks]);
+    this.notifyChange('PAYMENT_LINKS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      // Clean undefined fields to prevent Firestore serialization errors
+      const firestoreData = Object.fromEntries(
+        Object.entries(newLink).filter(([_, v]) => v !== undefined)
+      );
+      setDoc(doc(firestoreDb, 'payment_links', newLink.id), firestoreData).catch((e) =>
+        console.warn('Firebase payment link save error:', e)
+      );
+    }
+
+    try {
+      await this.logAction(
+        actorName,
+        'Payment Link Created',
+        `Generated link for ${client?.full_name || 'Client'} (₹${amount.toLocaleString('en-IN')})`,
+        actorId
+      );
+    } catch (logErr) {
+      console.warn('Action log warning:', logErr);
+    }
+
+    return newLink;
+  }
+
+  public async togglePaymentLinkActive(
+    id: string,
+    actorName: string = 'User',
+    actorId: string = 'user'
+  ): Promise<PaymentLink | null> {
+    const links = this.getPaymentLinks();
+    const cleanId = id.trim().toLowerCase().replace(/\/$/, '');
+    const index = links.findIndex((l) => l.id.trim().toLowerCase().replace(/\/$/, '') === cleanId);
+    if (index === -1) return null;
+
+    const currentActive = links[index].is_active !== false;
+    links[index].is_active = !currentActive;
+    setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
+    this.notifyChange('PAYMENT_LINKS');
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      updateDoc(doc(firestoreDb, 'payment_links', links[index].id), {
+        is_active: links[index].is_active,
+      }).catch((e) => console.warn('Firebase link toggle error:', e));
+    }
 
     await this.logAction(
       actorName,
-      'Payment Link Created',
-      `Generated link request for ${client?.full_name || 'Client'} (₹${amount.toLocaleString('en-IN')}) via UPI: ${upiIdToUse}`,
+      'Link Status Changed',
+      `${links[index].is_active ? 'Activated' : 'Shutdown (Deactivated)'} link ${links[index].id}`,
       actorId
     );
 
-    return newLink;
+    return links[index];
+  }
+
+  public async updateLivePaymentLink(
+    id: string,
+    updates: Partial<PaymentLink>,
+    actorName: string = 'Client',
+    actorId: string = 'client'
+  ): Promise<PaymentLink | null> {
+    const links = this.getPaymentLinks();
+    const cleanExactId = id.trim().replace(/\/$/, '');
+    const cleanLowerId = cleanExactId.toLowerCase();
+    let index = links.findIndex(
+      (l) => l.id.trim().toLowerCase() === cleanLowerId || l.id === cleanExactId
+    );
+
+    // If not found in memory, attempt fetching from cloud
+    if (index === -1 && isFirebaseConfigured() && firestoreDb) {
+      try {
+        let snap = await getDoc(doc(firestoreDb, 'payment_links', cleanExactId));
+        if (!snap.exists() && cleanExactId !== cleanLowerId) {
+          snap = await getDoc(doc(firestoreDb, 'payment_links', cleanLowerId));
+        }
+        if (snap.exists()) {
+          const fetchedLink = snap.data() as PaymentLink;
+          links.unshift(fetchedLink);
+          index = 0;
+        }
+      } catch (e) {
+        console.warn('Cloud fetch before update error:', e);
+      }
+    }
+
+    if (index === -1) {
+      throw new Error(`Payment link ${id} not found.`);
+    }
+
+    const currentLink = links[index];
+    const updatedLink: PaymentLink = {
+      ...currentLink,
+      ...updates,
+      id: currentLink.id, // protect original ID
+      created_at: currentLink.created_at, // protect creation date
+    };
+
+    links[index] = updatedLink;
+    setStored(STORAGE_KEYS.PAYMENT_LINKS, links);
+    this.notifyChange('PAYMENT_LINKS');
+
+    // Dispatch targeted event specifically for saved link edits
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('payment_link_edited_saved', {
+          detail: { linkId: updatedLink.id, updatedLink },
+        })
+      );
+    }
+
+    // Broadcast across windows / tabs
+    try {
+      const channel = new BroadcastChannel('payment_portal_channel');
+      channel.postMessage({
+        type: 'PAYMENT_LINK_EDIT_SAVED',
+        linkId: updatedLink.id,
+        updatedLink,
+        time: Date.now(),
+      });
+      channel.close();
+    } catch {
+      // Ignore broadcast channel errors in restricted environments
+    }
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const cleanPayload = Object.fromEntries(
+          Object.entries(updatedLink).filter(([_, v]) => v !== undefined)
+        );
+        await setDoc(doc(firestoreDb, 'payment_links', updatedLink.id), cleanPayload, { merge: true });
+        if (updatedLink.id.toLowerCase() !== updatedLink.id) {
+          // Also sync lowercase document ID if applicable
+          await setDoc(doc(firestoreDb, 'payment_links', updatedLink.id.toLowerCase()), cleanPayload, { merge: true }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Firebase live link update error:', e);
+      }
+    }
+
+    await this.logAction(
+      actorName,
+      'Live Link Updated',
+      `Updated link ${updatedLink.id} (₹${updatedLink.amount || 0})`,
+      actorId
+    );
+
+    return updatedLink;
+  }
+
+  // Alias for generic payment link update
+  public async updatePaymentLink(
+    id: string,
+    updates: Partial<PaymentLink>,
+    actorName: string = 'User',
+    actorId: string = 'user'
+  ): Promise<PaymentLink | null> {
+    return this.updateLivePaymentLink(id, updates, actorName, actorId);
   }
 
   public async submitPaymentProof(
@@ -1196,6 +1494,46 @@ class DatabaseService {
     };
   }
 
+  // Purge all transient data (links, transactions, activity logs) while preserving bank accounts, UPI IDs, and clients
+  public async purgeAllTransactionalData(): Promise<void> {
+    setStored(STORAGE_KEYS.PAYMENT_LINKS, []);
+    setStored(STORAGE_KEYS.TRANSACTIONS, []);
+    setStored(STORAGE_KEYS.ACTIVITY_LOGS, []);
+
+    if (isFirebaseConfigured() && firestoreDb) {
+      try {
+        const linksSnap = await getDocs(collection(firestoreDb, 'payment_links'));
+        for (const d of linksSnap.docs) {
+          deleteDoc(doc(firestoreDb, 'payment_links', d.id)).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Error clearing payment_links in firestore:', err);
+      }
+
+      try {
+        const txSnap = await getDocs(collection(firestoreDb, 'transactions'));
+        for (const d of txSnap.docs) {
+          deleteDoc(doc(firestoreDb, 'transactions', d.id)).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Error clearing transactions in firestore:', err);
+      }
+
+      try {
+        const logsSnap = await getDocs(collection(firestoreDb, 'activity_logs'));
+        for (const d of logsSnap.docs) {
+          deleteDoc(doc(firestoreDb, 'activity_logs', d.id)).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Error clearing activity_logs in firestore:', err);
+      }
+    }
+
+    this.notifyChange('PAYMENT_LINKS');
+    this.notifyChange('TRANSACTIONS');
+    this.notifyChange('ACTIVITY_LOGS');
+  }
+
   // Reset demo data
   public resetToDefaults() {
     setStored(STORAGE_KEYS.PROFILES, [INITIAL_SUPER_ADMIN]);
@@ -1203,9 +1541,10 @@ class DatabaseService {
     setStored(STORAGE_KEYS.BANK_ACCOUNTS, INITIAL_BANK_ACCOUNTS);
     setStored(STORAGE_KEYS.UPI_ACCOUNTS, INITIAL_UPI_ACCOUNTS);
     setStored(STORAGE_KEYS.SETTINGS, INITIAL_SETTINGS);
-    setStored(STORAGE_KEYS.PAYMENT_LINKS, INITIAL_PAYMENT_LINKS);
-    setStored(STORAGE_KEYS.ACTIVITY_LOGS, INITIAL_ACTIVITY_LOGS);
-    setStored(STORAGE_KEYS.TRANSACTIONS, INITIAL_TRANSACTIONS);
+    setStored(STORAGE_KEYS.PAYMENT_LINKS, []);
+    setStored(STORAGE_KEYS.ACTIVITY_LOGS, []);
+    setStored(STORAGE_KEYS.TRANSACTIONS, []);
+    this.purgeAllTransactionalData().catch(() => {});
   }
 }
 

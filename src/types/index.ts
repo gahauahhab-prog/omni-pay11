@@ -54,6 +54,8 @@ export interface Client {
   created_at: string;
 }
 
+export type PaymentLinkType = 'one_time' | 'live';
+
 export interface PaymentLink {
   id: string;
   client_id: string;
@@ -61,6 +63,12 @@ export interface PaymentLink {
   amount: number;
   status: PaymentLinkStatus;
   remarks?: string;
+  link_type?: PaymentLinkType; // 'one_time' | 'live'
+  is_active?: boolean; // toggle to shutdown / deactivate link
+  upi_enabled?: boolean; // whether to show UPI in link
+  bank_enabled?: boolean; // whether to show Bank Account transfer in link
+  custom_upi_id?: string; // dedicated custom UPI ID for this link if any
+  custom_bank_accounts?: BankAccount[]; // dedicated bank accounts for this link if any
   upi_account_id?: string;
   upi_id?: string;
   screenshot_url?: string;

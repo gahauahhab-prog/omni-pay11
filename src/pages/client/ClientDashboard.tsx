@@ -14,6 +14,7 @@ import {
   ExternalLink,
   Share2,
   Smartphone,
+  Plus,
 } from 'lucide-react';
 import { BankAccount, UpiAccount, PaymentLink } from '../../types';
 import { db } from '../../services/db';
@@ -39,6 +40,9 @@ export const ClientDashboard: React.FC = () => {
 
   // Generate Payment Link Modal
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
+  const [linkType, setLinkType] = useState<'one_time' | 'live'>('live');
+  const [upiEnabled, setUpiEnabled] = useState(true);
+  const [bankEnabled, setBankEnabled] = useState(true);
   const [amount, setAmount] = useState('');
   const [purpose, setPurpose] = useState('');
   const [selectedUpiId, setSelectedUpiId] = useState('');
@@ -169,8 +173,13 @@ Branch: ${bank.branch || 'Main Branch'}`;
       return;
     }
 
-    if (!selectedUpiId && activeUpis.length > 0) {
-      error('UPI Selection Required', 'Please choose a receiving UPI account.');
+    if (upiEnabled && !selectedUpiId && activeUpis.length > 0) {
+      error('UPI Selection Required', 'Please choose a receiving UPI account or disable UPI mode.');
+      return;
+    }
+
+    if (!upiEnabled && !bankEnabled) {
+      error('Select at least one mode', 'Please enable at least UPI or Bank Account transfer.');
       return;
     }
 
@@ -178,20 +187,26 @@ Branch: ${bank.branch || 'Main Branch'}`;
       const newLink = await db.createPaymentLink(
         user?.clientId || user?.id || 'client',
         val,
-        purpose || 'Client Payment Link Request',
+        purpose || 'Payment Request',
         user?.full_name || 'Client',
         user?.id || 'client',
         '',
-        selectedUpiId || undefined
+        selectedUpiId || undefined,
+        'live',
+        {
+          upi_enabled: upiEnabled,
+          bank_enabled: bankEnabled,
+        }
       );
 
       setCreatedLink(newLink);
       setIsGenerateModalOpen(false);
       setAmount('');
       setPurpose('');
-      success('Payment Link Ready', 'Live checkout URL generated with UPI intent.');
-    } catch {
-      error('Failed to submit link request');
+      success('Link Generated', 'Payment link generated successfully.');
+    } catch (err: any) {
+      console.error('Error generating link:', err);
+      error('Failed to generate link', err?.message || 'Please try again.');
     }
   };
 
@@ -209,15 +224,11 @@ Branch: ${bank.branch || 'Main Branch'}`;
       {/* Greeting Banner */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">
-            <ShieldCheck className="w-4 h-4" />
-            <span>Verified Payment Information Portal</span>
-          </div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            Hello, {user?.full_name || 'Valued Client'}
+            Hello, {user?.full_name || 'Client'}
           </h1>
-          <p className="text-xs text-slate-500 mt-1 max-w-2xl">
-            Below are the active, authorized company bank accounts and instant UPI QR handles assigned for your settlements. All payments made to these coordinates are verified directly.
+          <p className="text-xs text-slate-500 mt-1">
+            Active bank accounts and UPI handles.
           </p>
         </div>
 
@@ -228,7 +239,7 @@ Branch: ${bank.branch || 'Main Branch'}`;
             onClick={() => setIsGenerateModalOpen(true)}
             leftIcon={<LinkIcon className="w-4 h-4" />}
           >
-            Generate Payment Link
+            Generate Link
           </Button>
         </div>
       </div>
@@ -625,22 +636,22 @@ Branch: ${bank.branch || 'Main Branch'}`;
         </Modal>
       )}
 
-      {/* GENERATE PAYMENT LINK SECTION (Prompt specification: Card with Generate Payment Link button) */}
+      {/* GENERATE PAYMENT LINK SECTION */}
       <section>
-        <Card className="border-dashed border-2 border-blue-200 bg-blue-50/20">
-          <CardContent className="p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="space-y-1 text-center sm:text-left">
-              <div className="flex items-center justify-center sm:justify-start gap-2">
-                <Sparkles className="w-4 h-4 text-blue-600" />
-                <h3 className="text-base font-bold text-slate-900">Custom Payment Link Request</h3>
+        <Card className="border border-slate-200 bg-white">
+          <CardContent className="p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                <LinkIcon className="w-4 h-4" />
               </div>
-              <p className="text-xs text-slate-600 max-w-xl">
-                Need a specific customized payment link for your accounting or settlement record? Create a payment link request below.
-              </p>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Payment Links</h3>
+                <p className="text-xs text-slate-500">Create a link for payment collection</p>
+              </div>
             </div>
             <Button
               onClick={() => setIsGenerateModalOpen(true)}
-              leftIcon={<LinkIcon className="w-4 h-4" />}
+              leftIcon={<Plus className="w-4 h-4" />}
             >
               Generate Link
             </Button>
@@ -653,93 +664,106 @@ Branch: ${bank.branch || 'Main Branch'}`;
         isOpen={isGenerateModalOpen}
         onClose={() => setIsGenerateModalOpen(false)}
         title="Generate Payment Link"
-        description="Select receiving UPI account and specify amount to generate instant payment link."
         maxWidth="md"
       >
         <form onSubmit={handleGenerateLink} className="space-y-4">
-          {/* UPI Account Selection */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Receiving UPI Account / Handle <span className="text-rose-500">*</span>
+          {/* PAYMENT MODES SELECTION (UPI & BANK TRANSFERS) */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <label className="block text-xs font-semibold text-slate-800">
+              Payment Modes:
             </label>
-            {activeUpis.length === 0 ? (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
-                <Info className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>No active UPI accounts found. Please contact administration.</span>
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {activeUpis.map((u) => {
-                  const isSelected = selectedUpiId === u.id;
-                  return (
-                    <button
-                      type="button"
-                      key={u.id}
-                      onClick={() => setSelectedUpiId(u.id)}
-                      className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between ${
-                        isSelected
-                          ? 'border-blue-600 bg-blue-50/60 shadow-xs ring-2 ring-blue-500/20'
-                          : 'border-slate-200 hover:border-slate-300 bg-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs ${
-                            isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'
-                          }`}
-                        >
-                          <Smartphone className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-900">{u.upi_app}</span>
-                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
-                              Priority {u.priority}
-                            </span>
-                          </div>
-                          <span className="text-[11px] font-mono text-slate-600">{u.upi_id}</span>
-                        </div>
-                      </div>
-                      <div
-                        className={`w-4 h-4 rounded-full border flex items-center justify-center ${
-                          isSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300'
-                        }`}
-                      >
-                        {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            <p className="text-[11px] text-slate-400 mt-1">
-              The payment link, QR code, and mobile app intents will automatically route funds to this chosen UPI handle.
-            </p>
+            <div className="flex items-center gap-4 text-xs">
+              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={upiEnabled}
+                  onChange={(e) => setUpiEnabled(e.target.checked)}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>UPI Payment</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={bankEnabled}
+                  onChange={(e) => setBankEnabled(e.target.checked)}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>Bank Transfer</span>
+              </label>
+            </div>
           </div>
 
+          {/* UPI Account Selection (Shown only if UPI mode enabled) */}
+          {upiEnabled && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Receiving UPI Account <span className="text-rose-500">*</span>
+              </label>
+              {activeUpis.length === 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
+                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>No active UPI accounts found.</span>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                  {activeUpis.map((u) => {
+                    const isSelected = selectedUpiId === u.id;
+                    return (
+                      <button
+                        type="button"
+                        key={u.id}
+                        onClick={() => setSelectedUpiId(u.id)}
+                        className={`w-full text-left p-2.5 rounded-xl border transition-all flex items-center justify-between ${
+                          isSelected
+                            ? 'border-blue-600 bg-blue-50/60 shadow-xs ring-2 ring-blue-500/20'
+                            : 'border-slate-200 hover:border-slate-300 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs ${
+                              isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            <Smartphone className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <span className="text-xs font-bold text-slate-900 block">{u.upi_app}</span>
+                            <span className="text-[11px] font-mono text-slate-600">{u.upi_id}</span>
+                          </div>
+                        </div>
+                        <div
+                          className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center ${
+                            isSelected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300'
+                          }`}
+                        >
+                          {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <Input
-            label="Payment Amount (₹) (Optional - खुला छोड़ सकते हैं)"
+            label="Payment Amount (₹)"
             type="number"
             min={0}
-            placeholder="Khali chhod sakte hain (e.g. 5000 ya blank)"
+            placeholder="Amount in ₹ (Leave empty for open amount)"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            helperText="Khali chhodne par payer checkout page par apni marzi se amount daal sakega."
           />
 
           <Input
             label="Purpose / Note"
-            placeholder="e.g. Monthly Settlement / Invoice #102"
+            placeholder="e.g. Settlement / Invoice"
             value={purpose}
             onChange={(e) => setPurpose(e.target.value)}
           />
-
-          <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-900 flex items-start gap-2">
-            <Sparkles className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-            <p>
-              Deep-linking enabled: opens directly in Google Pay, PhonePe, or Paytm with the amount pre-filled.
-            </p>
-          </div>
 
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
             <Button type="button" variant="outline" onClick={() => setIsGenerateModalOpen(false)}>
@@ -755,8 +779,7 @@ Branch: ${bank.branch || 'Main Branch'}`;
         <Modal
           isOpen={!!createdLink}
           onClose={() => setCreatedLink(null)}
-          title="Payment Link Active"
-          description="Your payment link is live with UPI deep-linking."
+          title="Payment Link Ready"
           maxWidth="md"
         >
           <div className="space-y-4">

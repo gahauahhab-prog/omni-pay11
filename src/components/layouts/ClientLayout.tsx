@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   CreditCard,
+  Link as LinkIcon,
   Clock,
   HelpCircle,
   LogOut,
@@ -26,6 +27,7 @@ export const ClientLayout: React.FC = () => {
 
   const navItems = [
     { label: 'Payment Details', path: '/client/dashboard', icon: CreditCard },
+    { label: 'Manage Links', path: '/client/manage-links', icon: LinkIcon },
     { label: 'History', path: '/client/history', icon: Clock },
     { label: 'Support', path: '/client/support', icon: HelpCircle },
   ];

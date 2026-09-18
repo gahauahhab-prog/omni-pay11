@@ -60,7 +60,10 @@ export const PaymentCheckoutPage: React.FC = () => {
     }
 
     const cleanId = (linkId || '').trim().replace(/\/$/, '');
-    let item = db.getPaymentLinkById(cleanId);
+    let item = await db.fetchPaymentLinkById(cleanId);
+    if (!item) {
+      item = db.getPaymentLinkById(cleanId);
+    }
 
     const s = db.getSettings();
     setSettings(s);
@@ -71,21 +74,20 @@ export const PaymentCheckoutPage: React.FC = () => {
     const upis = db.getActiveUpiAccounts();
     setActiveUpis(upis);
 
-    // If link not yet stored in this browser:
+    // If link not yet stored in this browser or cloud:
     if (!item) {
-      const amtParam = searchParams.get('amt');
+      const amtParam = searchParams.get('amt') || searchParams.get('a');
       const amt = amtParam !== null ? parseFloat(amtParam) : 0;
-      if (searchParams.get('cli') || searchParams.get('upi') || cleanId) {
-        const upiId = searchParams.get('upi') || (upis[0]?.upi_id || 'payments@upi');
-        const clientName = searchParams.get('cli') || 'Citizen / Customer';
-        const remarks = searchParams.get('rem') || 'Payment Request';
-        const accId = searchParams.get('acc') || '';
-        const redUrl = searchParams.get('red') || searchParams.get('redirect_url') || '';
+      if (searchParams.get('upi') || searchParams.get('u') || cleanId) {
+        const upiId = searchParams.get('upi') || searchParams.get('u') || (upis[0]?.upi_id || 'payments@upi');
+        const remarks = searchParams.get('rem') || searchParams.get('r') || 'Payment Request';
+        const accId = searchParams.get('acc') || searchParams.get('ac') || '';
+        const redUrl = searchParams.get('red') || searchParams.get('rd') || searchParams.get('redirect_url') || '';
 
         item = {
           id: cleanId,
           client_id: 'client',
-          client_name: clientName,
+          client_name: 'Client',
           amount: isNaN(amt) ? 0 : amt,
           status: 'Pending',
           remarks: remarks,
@@ -94,7 +96,7 @@ export const PaymentCheckoutPage: React.FC = () => {
           redirect_url: redUrl,
           created_at: new Date().toISOString(),
         };
-        db.savePaymentLink(item);
+        db.savePaymentLinkSilently(item);
       }
     }
 
@@ -113,8 +115,89 @@ export const PaymentCheckoutPage: React.FC = () => {
     setIsLoading(false);
   };
 
+  // Helper to apply updated link smoothly only when data actually changes
+  const applyUpdatedLink = (fresh: PaymentLink) => {
+    setLink((prev) => {
+      if (!prev) return fresh;
+      const isSame =
+        prev.id === fresh.id &&
+        prev.amount === fresh.amount &&
+        prev.remarks === fresh.remarks &&
+        prev.status === fresh.status &&
+        prev.is_active === fresh.is_active &&
+        prev.upi_enabled === fresh.upi_enabled &&
+        prev.bank_enabled === fresh.bank_enabled &&
+        prev.upi_id === fresh.upi_id &&
+        prev.upi_account_id === fresh.upi_account_id &&
+        JSON.stringify(prev.custom_bank_accounts || []) === JSON.stringify(fresh.custom_bank_accounts || []);
+
+      if (isSame) return prev; // Do not trigger re-render if data is identical
+
+      const upis = db.getActiveUpiAccounts();
+      if (fresh.upi_account_id) {
+        const match = upis.find((u) => u.id === fresh.upi_account_id);
+        setSelectedUpi(match || upis.find((u) => u.upi_id === fresh.upi_id) || upis[0] || null);
+      } else if (fresh.upi_id) {
+        const match = upis.find((u) => u.upi_id === fresh.upi_id);
+        setSelectedUpi(match || upis[0] || null);
+      }
+      return fresh;
+    });
+  };
+
   useEffect(() => {
+    // Initial data load on mount
     loadLinkData();
+
+    const cleanId = (linkId || '').trim().replace(/\/$/, '');
+    const cleanLowerId = cleanId.toLowerCase();
+
+    // 1. Listen ONLY when client/admin saves edited changes for this specific link
+    const handleEditSaved = (e: Event) => {
+      const customEvt = e as CustomEvent<{ linkId?: string; updatedLink?: PaymentLink }>;
+      const targetId = (customEvt.detail?.linkId || '').trim().toLowerCase();
+      if (targetId === cleanLowerId || targetId === cleanId) {
+        if (customEvt.detail?.updatedLink) {
+          applyUpdatedLink(customEvt.detail.updatedLink);
+        } else {
+          loadLinkData();
+        }
+      }
+    };
+    window.addEventListener('payment_link_edited_saved', handleEditSaved);
+
+    // 2. BroadcastChannel: Listen strictly for PAYMENT_LINK_EDIT_SAVED across tabs
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('payment_portal_channel');
+      channel.onmessage = (msg: MessageEvent) => {
+        if (msg.data?.type === 'PAYMENT_LINK_EDIT_SAVED') {
+          const targetId = (msg.data?.linkId || '').trim().toLowerCase();
+          if (targetId === cleanLowerId || targetId === cleanId) {
+            if (msg.data?.updatedLink) {
+              applyUpdatedLink(msg.data.updatedLink);
+            } else {
+              loadLinkData();
+            }
+          }
+        }
+      };
+    } catch {
+      // Ignore
+    }
+
+    // 3. Firestore snapshot for this single link (for cross-device synchronization)
+    const unsubSingleLink = db.subscribeToPaymentLink(cleanId, (updatedLink) => {
+      applyUpdatedLink(updatedLink);
+    });
+
+    return () => {
+      window.removeEventListener('payment_link_edited_saved', handleEditSaved);
+      if (channel) {
+        channel.close();
+      }
+      unsubSingleLink();
+    };
   }, [linkId]);
 
   // Determine target redirect url
@@ -267,8 +350,41 @@ export const PaymentCheckoutPage: React.FC = () => {
     );
   }
 
-  // Active UPI & Payee details
-  const upiId = selectedUpi?.upi_id || link.upi_id || 'primary@upi';
+  // Check if link is shutdown / deactivated by client/admin
+  if (link.is_active === false) {
+    return (
+      <div className="min-h-screen bg-[#f4f6f9] flex items-center justify-center p-4">
+        <div className="bg-white max-w-md w-full p-8 rounded-lg shadow-sm border border-slate-300 text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-700 flex items-center justify-center mx-auto border border-amber-200">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">भुगतान लिंक निष्क्रिय है (Payment Link Closed / Shutdown)</h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            यह भुगतान लिंक प्रदाता द्वारा अस्थायी रूप से बंद (Shutdown) कर दिया गया है। कृपया नए भुगतान लिंक के लिए व्यापारी या प्रदाता से संपर्क करें।
+          </p>
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => triggerRedirect()}>
+              Return to Website
+            </Button>
+            <Button size="sm" onClick={() => navigate('/login')}>
+              Portal Login
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Effective payment modes enabled on this link
+  const isUpiEnabled = link.upi_enabled !== false;
+  const isBankEnabled = link.bank_enabled !== false;
+
+  // Active UPI & Payee details (Respect custom UPI ID if configured on this link)
+  const cleanUpi = (link.custom_upi_id || selectedUpi?.upi_id || link.upi_id || 'primary@upi').trim();
+  const upiId = cleanUpi;
+  const effectiveBanks = (link.custom_bank_accounts && link.custom_bank_accounts.length > 0)
+    ? link.custom_bank_accounts
+    : activeBanks;
   const rawPayeeName = settings.company_name || 'Government Portal';
   const cleanPayeeName = rawPayeeName.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'Beneficiary';
   const cleanNote = (link.remarks || 'Payment').replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'eChallan Remittance';
@@ -277,25 +393,18 @@ export const PaymentCheckoutPage: React.FC = () => {
   const parsedCustom = parseFloat(customAmount);
   const effectiveAmount = link.amount > 0 ? link.amount : (!isNaN(parsedCustom) && parsedCustom > 0 ? parsedCustom : 0);
 
-  // Construct UPI Intent URIs
-  const amountQuery = effectiveAmount > 0 ? `&am=${effectiveAmount}` : '';
+  // Construct UPI Intent URIs strictly compliant with NPCI:
+  // pa parameter MUST retain the literal '@' character. Encoding to %40 causes mobile UPI apps (PhonePe, GPay, Paytm) to fail.
+  const amountQuery = effectiveAmount > 0 ? `&am=${effectiveAmount.toFixed(2)}` : '';
+  const encodedPayee = encodeURIComponent(cleanPayeeName);
+  const encodedNote = encodeURIComponent(cleanNote);
 
-  const rawIntentUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-    cleanPayeeName
-  )}${amountQuery}&cu=INR&tn=${encodeURIComponent(cleanNote)}`;
-
-  const phonepeIntent = `phonepe://upi/pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-    cleanPayeeName
-  )}${amountQuery}&cu=INR&tn=${encodeURIComponent(cleanNote)}`;
-
-  const gpayIntent = `tez://upi/pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-    cleanPayeeName
-  )}${amountQuery}&cu=INR&tn=${encodeURIComponent(cleanNote)}`;
+  const rawIntentUri = `upi://pay?pa=${cleanUpi}&pn=${encodedPayee}${amountQuery}&cu=INR&tn=${encodedNote}`;
+  const phonepeIntent = `phonepe://upi/pay?pa=${cleanUpi}&pn=${encodedPayee}${amountQuery}&cu=INR&tn=${encodedNote}`;
+  const gpayIntent = `tez://upi/pay?pa=${cleanUpi}&pn=${encodedPayee}${amountQuery}&cu=INR&tn=${encodedNote}`;
 
   // Paytm Official Android intent without suspicious keywords (direct & standard)
-  const paytmAndroidIntent = `intent://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(
-    cleanPayeeName
-  )}${amountQuery}&cu=INR&tn=${encodeURIComponent(cleanNote)}#Intent;scheme=upi;package=net.one97.paytm;end`;
+  const paytmAndroidIntent = `intent://pay?pa=${cleanUpi}&pn=${encodedPayee}${amountQuery}&cu=INR&tn=${encodedNote}#Intent;scheme=upi;package=net.one97.paytm;end`;
 
   const targetSiteUrl = getTargetRedirectUrl();
 
@@ -349,92 +458,55 @@ export const PaymentCheckoutPage: React.FC = () => {
         {/* MAIN BODY: OFFICIAL CHALLAN SLIP & PAYMENT INTERFACE */}
         {/* ==================================================================== */}
         <main className="bg-white rounded-b-lg border-x border-b border-slate-300 shadow-md divide-y divide-slate-200">
-          {/* CHALLAN / REMITTANCE SUMMARY TABLE (OG Government Form Look) */}
-          <div className="p-4 sm:p-6 bg-slate-50/70 space-y-4">
+          {/* OFFICIAL PAYMENT GATEWAY BAR */}
+          <div className="p-4 sm:p-6 bg-slate-50/70 space-y-3">
             <div className="flex items-center justify-between border-b border-slate-200 pb-2">
               <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center gap-1.5">
-                <FileCheck className="w-4 h-4 text-[#0c2340]" />
-                इलेक्ट्रॉनिक भुगतान ई-चालान | ELECTRONIC PAYMENT CHALLAN
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                सुरक्षित डिजिटल ई-भुगतान | SECURE INSTANT UPI PAYMENT
               </span>
-              <span className="text-[11px] font-mono font-bold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-300">
-                REF: {link.id}
+              <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Verified
               </span>
             </div>
 
-            {/* Official Tabular Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-              <div className="bg-white p-2.5 rounded border border-slate-200">
-                <span className="text-[10px] text-slate-500 font-semibold uppercase block">
-                  विभाग / प्राप्तकर्ता (Beneficiary / Department)
-                </span>
-                <span className="font-bold text-slate-900 text-sm mt-0.5 block">
-                  {settings.company_name || 'Government Portal'}
-                </span>
-              </div>
+            {/* AMOUNT ROW - Shows total payable amount when fixed, or input for custom amount when open */}
+            {link.amount > 0 ? (
+              <div className="bg-[#0c2340]/5 border border-[#0c2340]/20 rounded-md p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <span className="text-[11px] font-bold text-[#0c2340] uppercase tracking-wider block">
+                    कुल देय धनराशि | TOTAL AMOUNT PAYABLE
+                  </span>
+                  <span className="text-[11px] text-slate-500">भारतीय रुपए (INR)</span>
+                </div>
 
-              <div className="bg-white p-2.5 rounded border border-slate-200">
-                <span className="text-[10px] text-slate-500 font-semibold uppercase block">
-                  भुगतानकर्ता (Remitter / Payer)
-                </span>
-                <span className="font-bold text-slate-900 text-sm mt-0.5 block">
-                  {link.client_name || 'Authorized Remitter'}
-                </span>
-              </div>
-
-              <div className="bg-white p-2.5 rounded border border-slate-200 sm:col-span-2">
-                <span className="text-[10px] text-slate-500 font-semibold uppercase block">
-                  लेखा शीर्ष / उद्देश्य (Remittance Head / Remarks)
-                </span>
-                <span className="text-slate-800 font-medium text-xs mt-0.5 block">
-                  {link.remarks || 'Standard Electronic Remittance'}
-                </span>
-              </div>
-            </div>
-
-            {/* AMOUNT ROW */}
-            <div className="bg-[#0c2340]/5 border border-[#0c2340]/20 rounded-md p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <span className="text-[11px] font-bold text-[#0c2340] uppercase tracking-wider block">
-                  कुल देय धनराशि | TOTAL AMOUNT PAYABLE
-                </span>
-                <span className="text-[11px] text-slate-500">भारतीय रुपए (INR)</span>
-              </div>
-
-              {link.amount > 0 ? (
                 <div className="text-2xl sm:text-3xl font-extrabold text-[#0c2340] font-mono">
                   ₹ {link.amount.toLocaleString('en-IN')}
                 </div>
-              ) : (
-                /* OPTIONAL / OPEN AMOUNT INPUT FIELD */
-                <div className="w-full sm:w-64 space-y-1.5">
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-500">₹</span>
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      placeholder="राशि दर्ज करें (Enter Amount)"
-                      value={customAmount}
-                      onChange={(e) => setCustomAmount(e.target.value)}
-                      className="w-full pl-8 pr-3 py-2 bg-white border-2 border-[#0c2340] rounded font-mono text-base font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0c2340]/20"
-                    />
-                  </div>
-                  {/* Quick Select Preset Chips */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {['500', '1000', '2000', '5000'].map((chip) => (
-                      <button
-                        type="button"
-                        key={chip}
-                        onClick={() => setCustomAmount(chip)}
-                        className="text-[10px] font-bold bg-white border border-slate-300 hover:border-[#0c2340] hover:bg-slate-100 text-slate-700 px-2 py-0.5 rounded transition-all"
-                      >
-                        +₹{chip}
-                      </button>
-                    ))}
-                  </div>
+              </div>
+            ) : (
+              <div className="bg-[#0c2340]/5 border border-[#0c2340]/20 rounded-md p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <span className="text-[11px] font-bold text-[#0c2340] uppercase tracking-wider block">
+                    भुगतान राशि प्रविष्ट करें | ENTER AMOUNT TO PAY
+                  </span>
+                  <span className="text-[11px] text-slate-500">खुला चालान (Open Challan)</span>
                 </div>
-              )}
-            </div>
+
+                <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded px-3 py-1.5 shadow-xs">
+                  <span className="text-lg font-bold text-[#0c2340]">₹</span>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="Enter amount"
+                    value={customAmount}
+                    onChange={(e) => setCustomAmount(e.target.value)}
+                    className="w-36 text-lg font-extrabold text-[#0c2340] font-mono outline-hidden"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ==================================================================== */}
@@ -512,283 +584,295 @@ export const PaymentCheckoutPage: React.FC = () => {
           {link.status === 'Pending' && (
             <div className="p-4 sm:p-6 space-y-6">
               {/* ================================================================ */}
-              {/* 1ST PRIORITY: SCANNER (QR CODE) */}
+              {/* 1ST PRIORITY: SCANNER (QR CODE) (SHOWN IF UPI ENABLED) */}
               {/* ================================================================ */}
-              <div className="border-2 border-slate-300 rounded-lg p-5 bg-white text-center space-y-3">
-                <div className="border-b border-slate-200 pb-2">
-                  <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                    <QrCode className="w-4 h-4 text-[#0c2340]" />
-                    प्राथमिकता 1: क्यूआर कोड स्कैन करके भुगतान करें (SCAN & PAY VIA ANY UPI APP)
-                  </span>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Google Pay, PhonePe, Paytm, BHIM, या किसी भी बैंकिंग ऐप के स्कैनर से स्कैन करें
-                  </p>
-                </div>
-
-                <div className="flex justify-center my-2">
-                  <div className="p-3 bg-white rounded border-2 border-slate-400 inline-block shadow-sm">
-                    <QRCodeDisplay
-                      upiId={upiId}
-                      payeeName={cleanPayeeName}
-                      amount={effectiveAmount > 0 ? effectiveAmount : undefined}
-                      size={200}
-                      showActions={false}
-                    />
-                  </div>
-                </div>
-
-                <div className="text-[11px] text-slate-600 flex items-center justify-center gap-2 font-mono">
-                  <span>देय राशि (Encoded Amount):</span>
-                  <strong className="text-slate-900 font-bold">
-                    {effectiveAmount > 0 ? `₹${effectiveAmount.toLocaleString('en-IN')}` : 'ग्राहक द्वारा देय (Open Amount)'}
-                  </strong>
-                </div>
-              </div>
-
-              {/* ================================================================ */}
-              {/* 2ND PRIORITY: UPI ID (VPA) - JUST BELOW SCANNER */}
-              {/* ================================================================ */}
-              <div className="border border-slate-300 rounded-lg p-4 bg-slate-50 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider">
-                    प्राथमिकता 2: अधिकृत UPI ID (Virtual Payment Address - VPA)
-                  </span>
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase">
-                    एक-क्लिक कॉपी
-                  </span>
-                </div>
-
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white p-3 rounded border border-slate-300">
-                  <div className="space-y-0.5">
-                    <span className="font-mono text-sm sm:text-base font-bold text-slate-900 select-all block">
-                      {upiId}
+              {isUpiEnabled && (
+                <div className="border-2 border-slate-300 rounded-lg p-5 bg-white text-center space-y-3">
+                  <div className="border-b border-slate-200 pb-2">
+                    <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center justify-center gap-1.5">
+                      <QrCode className="w-4 h-4 text-[#0c2340]" />
+                      प्राथमिकता 1: क्यूआर कोड स्कैन करके भुगतान करें (SCAN & PAY VIA ANY UPI APP)
                     </span>
-                    <span className="text-[11px] text-slate-500 block">
-                      खाता नाम (Payee Handle): <strong>{selectedUpi?.account_name || cleanPayeeName}</strong>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Google Pay, PhonePe, Paytm, BHIM, या किसी भी बैंकिंग ऐप के स्कैनर से स्कैन करें
+                    </p>
+                  </div>
+
+                  <div className="flex justify-center my-2">
+                    <div className="p-3 bg-white rounded border-2 border-slate-400 inline-block shadow-sm">
+                      <QRCodeDisplay
+                        upiId={upiId}
+                        payeeName={cleanPayeeName}
+                        amount={effectiveAmount > 0 ? effectiveAmount : undefined}
+                        remarks={cleanNote}
+                        qrUrl={selectedUpi?.qr_url}
+                        size={200}
+                        showActions={false}
+                      />
+                    </div>
+                  </div>
+
+                  {link.amount > 0 && (
+                    <div className="text-[11px] text-slate-600 flex items-center justify-center gap-2 font-mono">
+                      <span>देय राशि (Amount):</span>
+                      <strong className="text-slate-900 font-bold">
+                        ₹{link.amount.toLocaleString('en-IN')}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ================================================================ */}
+              {/* 2ND PRIORITY: UPI ID (VPA) (SHOWN IF UPI ENABLED) */}
+              {/* ================================================================ */}
+              {isUpiEnabled && (
+                <div className="border border-slate-300 rounded-lg p-4 bg-slate-50 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider">
+                      प्राथमिकता 2: अधिकृत UPI ID (Virtual Payment Address - VPA)
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">
+                      एक-क्लिक कॉपी
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleCopy('active_upi', upiId, 'UPI ID')}
-                    className="px-3.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
-                  >
-                    {copiedKey === 'active_upi' ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-700" />
-                        <span className="text-emerald-800 font-bold">कॉपी हो गया (Copied)</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-slate-600" />
-                        <span>UPI ID कॉपी करें (Copy)</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-white p-3 rounded border border-slate-300">
+                    <div className="space-y-0.5">
+                      <span className="font-mono text-sm sm:text-base font-bold text-slate-900 select-all block">
+                        {upiId}
+                      </span>
+                      <span className="text-[11px] text-slate-500 block">
+                        खाता नाम (Payee Handle): <strong>{selectedUpi?.account_name || cleanPayeeName}</strong>
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCopy('active_upi', upiId, 'UPI ID')}
+                      className="px-3.5 py-1.5 rounded bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-all shrink-0 cursor-pointer"
+                    >
+                      {copiedKey === 'active_upi' ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-700" />
+                          <span className="text-emerald-800 font-bold">कॉपी हो गया (Copied)</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-slate-600" />
+                          <span>UPI ID कॉपी करें (Copy)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* ================================================================ */}
-              {/* 3RD PRIORITY: UPI APPS - JUST BELOW UPI ID */}
+              {/* 3RD PRIORITY: UPI APPS (SHOWN IF UPI ENABLED) */}
               {/* ================================================================ */}
-              <div className="border border-slate-300 rounded-lg p-4 bg-white space-y-3">
-                <div className="border-b border-slate-200 pb-2">
-                  <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center gap-1.5">
-                    <Smartphone className="w-4 h-4 text-[#0c2340]" />
-                    प्राथमिकता 3: मोबाइल ऐप द्वारा तत्काल भुगतान (INSTANT PAY VIA UPI APPS)
-                  </span>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    यदि आप मोबाइल फोन पर हैं, तो सीधे नीचे दिए गए ऐप बटन पर टैप करें
-                  </p>
+              {isUpiEnabled && (
+                <div className="border border-slate-300 rounded-lg p-4 bg-white space-y-3">
+                  <div className="border-b border-slate-200 pb-2">
+                    <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center gap-1.5">
+                      <Smartphone className="w-4 h-4 text-[#0c2340]" />
+                      प्राथमिकता 3: मोबाइल ऐप द्वारा तत्काल भुगतान (INSTANT PAY VIA UPI APPS)
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      यदि आप मोबाइल फोन पर हैं, तो सीधे नीचे दिए गए ऐप बटन पर टैप करें
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {/* PhonePe */}
+                    <a
+                      href={phonepeIntent}
+                      className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-[#5f259f] hover:bg-purple-50/40 transition-all group"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded bg-[#5f259f] text-white flex items-center justify-center font-black text-lg shrink-0">
+                          पे
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block group-hover:text-[#5f259f]">
+                            PhonePe UPI
+                          </span>
+                          <span className="text-[10px] text-slate-500">फ़ोनपे द्वारा भुगतान करें</span>
+                        </div>
+                      </div>
+                      <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-[#5f259f]" />
+                    </a>
+
+                    {/* Google Pay */}
+                    <a
+                      href={gpayIntent}
+                      className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-blue-500 hover:bg-blue-50/40 transition-all group"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded bg-white border border-slate-300 text-[#1a73e8] flex items-center justify-center font-black text-lg shrink-0">
+                          G
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block group-hover:text-blue-700">
+                            Google Pay (GPay)
+                          </span>
+                          <span className="text-[10px] text-slate-500">गूगल पे द्वारा भुगतान करें</span>
+                        </div>
+                      </div>
+                      <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600" />
+                    </a>
+
+                    {/* Paytm (Clean & Genuine - NO WARNING, NO SAFE MODE TEXT) */}
+                    <a
+                      href={paytmAndroidIntent}
+                      onClick={() => {
+                        copyToClipboard(upiId);
+                      }}
+                      className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-[#002e6e] hover:bg-cyan-50/40 transition-all group"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded bg-[#002e6e] text-[#00b9f5] flex items-center justify-center font-black text-lg shrink-0">
+                          ₹
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block group-hover:text-[#002e6e]">
+                            Paytm UPI
+                          </span>
+                          <span className="text-[10px] text-slate-500">पेटीएम द्वारा भुगतान करें</span>
+                        </div>
+                      </div>
+                      <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-[#002e6e]" />
+                    </a>
+
+                    {/* BHIM / Other UPI */}
+                    <a
+                      href={rawIntentUri}
+                      className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-amber-600 hover:bg-amber-50/40 transition-all group"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded bg-[#0c2340] text-amber-300 flex items-center justify-center font-black text-sm shrink-0">
+                          UPI
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block group-hover:text-[#0c2340]">
+                            BHIM / Any UPI App
+                          </span>
+                          <span className="text-[10px] text-slate-500">अन्य बैंकिंग यूपीआई ऐप</span>
+                        </div>
+                      </div>
+                      <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-slate-800" />
+                    </a>
+                  </div>
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {/* PhonePe */}
-                  <a
-                    href={phonepeIntent}
-                    className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-[#5f259f] hover:bg-purple-50/40 transition-all group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded bg-[#5f259f] text-white flex items-center justify-center font-black text-lg shrink-0">
-                        पे
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block group-hover:text-[#5f259f]">
-                          PhonePe UPI
-                        </span>
-                        <span className="text-[10px] text-slate-500">फ़ोनपे द्वारा भुगतान करें</span>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-[#5f259f]" />
-                  </a>
-
-                  {/* Google Pay */}
-                  <a
-                    href={gpayIntent}
-                    className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-blue-500 hover:bg-blue-50/40 transition-all group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded bg-white border border-slate-300 text-[#1a73e8] flex items-center justify-center font-black text-lg shrink-0">
-                        G
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block group-hover:text-blue-700">
-                          Google Pay (GPay)
-                        </span>
-                        <span className="text-[10px] text-slate-500">गूगल पे द्वारा भुगतान करें</span>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600" />
-                  </a>
-
-                  {/* Paytm (Clean & Genuine - NO WARNING, NO SAFE MODE TEXT) */}
-                  <a
-                    href={paytmAndroidIntent}
-                    onClick={() => {
-                      copyToClipboard(upiId);
-                    }}
-                    className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-[#002e6e] hover:bg-cyan-50/40 transition-all group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded bg-[#002e6e] text-[#00b9f5] flex items-center justify-center font-black text-lg shrink-0">
-                        ₹
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block group-hover:text-[#002e6e]">
-                          Paytm UPI
-                        </span>
-                        <span className="text-[10px] text-slate-500">पेटीएम द्वारा भुगतान करें</span>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-[#002e6e]" />
-                  </a>
-
-                  {/* BHIM / Other UPI */}
-                  <a
-                    href={rawIntentUri}
-                    className="flex items-center justify-between p-3 rounded-lg border border-slate-300 hover:border-amber-600 hover:bg-amber-50/40 transition-all group"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-9 h-9 rounded bg-[#0c2340] text-amber-300 flex items-center justify-center font-black text-sm shrink-0">
-                        UPI
-                      </div>
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block group-hover:text-[#0c2340]">
-                          BHIM / Any UPI App
-                        </span>
-                        <span className="text-[10px] text-slate-500">अन्य बैंकिंग यूपीआई ऐप</span>
-                      </div>
-                    </div>
-                    <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-slate-800" />
-                  </a>
-                </div>
-              </div>
+              )}
 
               {/* ================================================================ */}
-              {/* 4TH SECTION: BANK ACCOUNT TRANSFER (NEFT / RTGS / IMPS) */}
+              {/* 4TH SECTION: BANK ACCOUNT TRANSFER (SHOWN IF BANK ENABLED) */}
               {/* Clean layout: bank name separate/small, holder name equal size */}
               {/* ================================================================ */}
-              <div className="border border-slate-300 rounded-lg p-4 bg-white space-y-3">
-                <div className="border-b border-slate-200 pb-2">
-                  <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center gap-1.5">
-                    <Building2 className="w-4 h-4 text-[#0c2340]" />
-                    बैंक खाता विवरण (NEFT / RTGS / IMPS Remittance)
-                  </span>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    सीधे बैंक खाते में ट्रांसफर करने के लिए विवरण
-                  </p>
-                </div>
-
-                {activeBanks.length === 0 ? (
-                  <div className="text-center py-4 text-xs text-slate-500 bg-slate-50 rounded border border-slate-200">
-                    बैंक खाते का विवरण उपलब्ध नहीं है। कृपया ऊपर दिए गए क्यूआर कोड या यूपीआई का उपयोग करें।
+              {isBankEnabled && (
+                <div className="border border-slate-300 rounded-lg p-4 bg-white space-y-3">
+                  <div className="border-b border-slate-200 pb-2">
+                    <span className="text-xs font-bold text-[#0c2340] uppercase tracking-wider flex items-center gap-1.5">
+                      <Building2 className="w-4 h-4 text-[#0c2340]" />
+                      बैंक खाता विवरण (NEFT / RTGS / IMPS Remittance)
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      सीधे बैंक खाते में ट्रांसफर करने के लिए विवरण
+                    </p>
                   </div>
-                ) : (
-                  activeBanks.map((b) => (
-                    <div
-                      key={b.id}
-                      className="p-3.5 rounded border border-slate-300 bg-slate-50/60 space-y-3 text-xs"
-                    >
-                      {/* Bank Name (Small & Separate Badge) & Account Holder Name (Prominent & Clear) */}
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-[10px] uppercase font-bold text-[#0c2340] bg-slate-200 px-2 py-0.5 rounded border border-slate-300">
-                              {b.bank_name}
-                            </span>
-                            {b.branch && (
-                              <span className="text-[10px] text-slate-500">
-                                {b.branch} Branch
-                              </span>
-                            )}
-                          </div>
 
-                          <div className="text-sm font-bold text-slate-900 mt-0.5">
-                            खाता धारक (Beneficiary): <span className="text-[#0c2340]">{b.account_holder}</span>
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(`holder_${b.id}`, b.account_holder, 'Beneficiary Name')}
-                          className="px-2.5 py-1 rounded bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 text-[11px] font-semibold self-start sm:self-auto cursor-pointer"
-                        >
-                          {copiedKey === `holder_${b.id}` ? 'Copied' : 'Copy Name'}
-                        </button>
-                      </div>
-
-                      {/* Account Number & IFSC Grid */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-200">
-                          <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">
-                              खाता संख्या (Account No)
-                            </span>
-                            <span className="font-mono text-sm font-bold text-slate-900">
-                              {b.account_number}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(`acc_${b.id}`, b.account_number, 'Account Number')}
-                            className="p-1 text-slate-600 hover:text-slate-900 rounded cursor-pointer"
-                            title="Copy Account Number"
-                          >
-                            {copiedKey === `acc_${b.id}` ? (
-                              <Check className="w-4 h-4 text-emerald-700" />
-                            ) : (
-                              <Copy className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-
-                        <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-200">
-                          <div>
-                            <span className="text-[10px] text-slate-500 font-bold uppercase block">
-                              आईएफएससी कोड (IFSC Code)
-                            </span>
-                            <span className="font-mono text-sm font-bold text-slate-900 uppercase">
-                              {b.ifsc_code}
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(`ifsc_${b.id}`, b.ifsc_code, 'IFSC Code')}
-                            className="p-1 text-slate-600 hover:text-slate-900 rounded cursor-pointer"
-                            title="Copy IFSC Code"
-                          >
-                            {copiedKey === `ifsc_${b.id}` ? (
-                              <Check className="w-4 h-4 text-emerald-700" />
-                            ) : (
-                              <Copy className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
+                  {effectiveBanks.length === 0 ? (
+                    <div className="text-center py-4 text-xs text-slate-500 bg-slate-50 rounded border border-slate-200">
+                      बैंक खाते का विवरण उपलब्ध नहीं है। कृपया ऊपर दिए गए क्यूआर कोड या यूपीआई का उपयोग करें।
                     </div>
-                  ))
-                )}
-              </div>
+                  ) : (
+                    effectiveBanks.map((b) => (
+                      <div
+                        key={b.id}
+                        className="p-3.5 rounded border border-slate-300 bg-slate-50/60 space-y-3 text-xs"
+                      >
+                        {/* Bank Name (Small & Separate Badge) & Account Holder Name (Prominent & Clear) */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[10px] uppercase font-bold text-[#0c2340] bg-slate-200 px-2 py-0.5 rounded border border-slate-300">
+                                {b.bank_name}
+                              </span>
+                              {b.branch && (
+                                <span className="text-[10px] text-slate-500">
+                                  {b.branch} Branch
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="text-sm font-bold text-slate-900 mt-0.5">
+                              खाता धारक (Beneficiary): <span className="text-[#0c2340]">{b.account_holder}</span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(`holder_${b.id}`, b.account_holder, 'Beneficiary Name')}
+                            className="px-2.5 py-1 rounded bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 text-[11px] font-semibold self-start sm:self-auto cursor-pointer"
+                          >
+                            {copiedKey === `holder_${b.id}` ? 'Copied' : 'Copy Name'}
+                          </button>
+                        </div>
+
+                        {/* Account Number & IFSC Grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-200">
+                            <div>
+                              <span className="text-[10px] text-slate-500 font-bold uppercase block">
+                                खाता संख्या (Account No)
+                              </span>
+                              <span className="font-mono text-sm font-bold text-slate-900">
+                                {b.account_number}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(`acc_${b.id}`, b.account_number, 'Account Number')}
+                              className="p-1 text-slate-600 hover:text-slate-900 rounded cursor-pointer"
+                              title="Copy Account Number"
+                            >
+                              {copiedKey === `acc_${b.id}` ? (
+                                <Check className="w-4 h-4 text-emerald-700" />
+                              ) : (
+                                <Copy className="w-4 h-4" />
+                              )}
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-200">
+                            <div>
+                              <span className="text-[10px] text-slate-500 font-bold uppercase block">
+                                आईएफएससी कोड (IFSC Code)
+                              </span>
+                              <span className="font-mono text-sm font-bold text-slate-900 uppercase">
+                                {b.ifsc_code}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(`ifsc_${b.id}`, b.ifsc_code, 'IFSC Code')}
+                              className="p-1 text-slate-600 hover:text-slate-900 rounded cursor-pointer"
+                              title="Copy IFSC Code"
+                            >
+                              {copiedKey === `ifsc_${b.id}` ? (
+                                <Check className="w-4 h-4 text-emerald-700" />
+                              ) : (
+                                <Copy className="w-4 h-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
 
               {/* ================================================================ */}
               {/* 5TH SECTION: PAYMENT CONFIRMATION & PROOF SUBMISSION */}

@@ -15,14 +15,24 @@ export const ClientHistoryPage: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
-    // Get links associated with client or all links if testing
-    const allLinks = db.getPaymentLinks();
-    if (user?.clientId) {
-      const clientLinks = allLinks.filter((l) => l.client_id === user.clientId);
-      setLinks(clientLinks.length > 0 ? clientLinks : allLinks.slice(0, 3));
-    } else {
-      setLinks(allLinks);
-    }
+    const loadData = () => {
+      const allLinks = db.getPaymentLinks();
+      if (user?.clientId) {
+        const clientLinks = allLinks.filter((l) => l.client_id === user.clientId);
+        setLinks(clientLinks);
+      } else {
+        setLinks(allLinks);
+      }
+    };
+
+    loadData();
+    window.addEventListener('portal_accounts_updated', loadData);
+    window.addEventListener('storage', loadData);
+
+    return () => {
+      window.removeEventListener('portal_accounts_updated', loadData);
+      window.removeEventListener('storage', loadData);
+    };
   }, [user]);
 
   const filteredLinks = links.filter((l) => {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ShieldCheck, Eye, EyeOff, Lock, Mail, ArrowRight } from 'lucide-react';
+import { ShieldCheck, Eye, EyeOff, Lock, Mail, ArrowRight, CreditCard } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { Button } from '../../components/ui/Button';
@@ -62,7 +62,29 @@ export const LoginPage: React.FC = () => {
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0 space-y-3">
+        {/* Direct Link to Payment Gateway for Instant Preview */}
+        <button
+          type="button"
+          onClick={() => navigate('/pay/DEMO-CHALLAN?amt=1500&rem=Official%20Challan%20Fee')}
+          className="w-full bg-[#0c2340] hover:bg-[#1a365d] text-white p-3 rounded-xl border border-[#1e3a8a] shadow-sm flex items-center justify-between text-left transition-all group cursor-pointer"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-amber-300">
+              <CreditCard className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-xs font-bold block text-white">
+                🏛️ View Live Payment Gateway Preview
+              </span>
+              <span className="text-[10px] text-slate-300 block">
+                ई-चालान भुगतान पेज को सीधे प्रीव्यू में देखें
+              </span>
+            </div>
+          </div>
+          <ArrowRight className="w-4 h-4 text-slate-300 group-hover:translate-x-0.5 transition-transform" />
+        </button>
+
         <div className="bg-white py-8 px-6 sm:px-8 shadow-sm border border-slate-200 rounded-xl">
           <form className="space-y-4" onSubmit={handleSubmit}>
             <Input

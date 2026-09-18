@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, Upload, RotateCcw, Building } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Upload, RotateCcw, Building, Trash2 } from 'lucide-react';
 import { Settings } from '../../types';
 import { db } from '../../services/db';
 import { useAuth } from '../../context/AuthContext';
@@ -70,6 +70,17 @@ export const SettingsPage: React.FC = () => {
       error('Save Failed', 'Unable to persist portal settings.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handlePurgeData = async () => {
+    if (
+      window.confirm(
+        'Clear all payment links, transactions, and activity logs for a clean fresh start?\n\nNOTE: All bank accounts, UPI handles, and client login accounts will be safely PRESERVED.'
+      )
+    ) {
+      await db.purgeAllTransactionalData();
+      success('System Refreshed', 'All links, transactions, and activity logs have been wiped clean.');
     }
   };
 
@@ -176,15 +187,28 @@ export const SettingsPage: React.FC = () => {
         </Card>
 
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleResetDemoData}
-            leftIcon={<RotateCcw className="w-3.5 h-3.5 text-slate-500" />}
-          >
-            Reset Default Demo Data
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handlePurgeData}
+              className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+              leftIcon={<Trash2 className="w-3.5 h-3.5 text-rose-500" />}
+            >
+              Clear All Links & Transactions (Fresh Start)
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleResetDemoData}
+              leftIcon={<RotateCcw className="w-3.5 h-3.5 text-slate-500" />}
+            >
+              Reset Default Demo Data
+            </Button>
+          </div>
 
           <Button type="submit" size="md" isLoading={isSaving} leftIcon={<Save className="w-4 h-4" />}>
             Save Settings

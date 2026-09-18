@@ -18,6 +18,7 @@ import {
   FileSpreadsheet,
   Trash2,
   Download,
+  Edit3,
 } from 'lucide-react';
 import { PaymentLink, Client, UpiAccount } from '../../types';
 import { db } from '../../services/db';
@@ -46,6 +47,9 @@ export const PaymentLinksPage: React.FC = () => {
 
   // Create Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [linkType, setLinkType] = useState<'one_time' | 'live'>('one_time');
+  const [upiEnabled, setUpiEnabled] = useState(true);
+  const [bankEnabled, setBankEnabled] = useState(true);
   const [clientId, setClientId] = useState('');
   const [amount, setAmount] = useState('');
   const [selectedUpiId, setSelectedUpiId] = useState('');
@@ -65,6 +69,76 @@ export const PaymentLinksPage: React.FC = () => {
   // Copied indicator
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [deletingLink, setDeletingLink] = useState<PaymentLink | null>(null);
+
+  // Edit Link Modal State
+  const [editingLink, setEditingLink] = useState<PaymentLink | null>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editRemarks, setEditRemarks] = useState('');
+  const [editUpiEnabled, setEditUpiEnabled] = useState(true);
+  const [editBankEnabled, setEditBankEnabled] = useState(true);
+  const [editSelectedUpiId, setEditSelectedUpiId] = useState('');
+  const [editCustomUpiId, setEditCustomUpiId] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
+  const openEditLink = (l: PaymentLink) => {
+    setEditingLink(l);
+    setEditAmount(l.amount > 0 ? l.amount.toString() : '');
+    setEditRemarks(l.remarks || '');
+    setEditUpiEnabled(l.upi_enabled !== false);
+    setEditBankEnabled(l.bank_enabled !== false);
+    setEditSelectedUpiId(l.upi_account_id || '');
+    setEditCustomUpiId(l.custom_upi_id || '');
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLink) return;
+
+    if (!editUpiEnabled && !editBankEnabled) {
+      error('Select Payment Mode', 'Please keep at least UPI or Bank Account enabled.');
+      return;
+    }
+
+    const val = editAmount.trim() ? parseFloat(editAmount) : 0;
+    if (editAmount.trim() && (isNaN(val) || val < 0)) {
+      error('Invalid Amount', 'Please provide a valid positive amount.');
+      return;
+    }
+
+    let upiIdToSave = editingLink.upi_id;
+    if (editCustomUpiId.trim()) {
+      upiIdToSave = editCustomUpiId.trim();
+    } else if (editSelectedUpiId) {
+      const match = upis.find((u) => u.id === editSelectedUpiId);
+      if (match) upiIdToSave = match.upi_id;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      await db.updateLivePaymentLink(
+        editingLink.id,
+        {
+          amount: val,
+          remarks: editRemarks.trim() || 'Payment Request',
+          upi_enabled: editUpiEnabled,
+          bank_enabled: editBankEnabled,
+          upi_account_id: editSelectedUpiId || '',
+          custom_upi_id: editCustomUpiId.trim() || '',
+          upi_id: upiIdToSave,
+        },
+        user?.full_name || 'Admin',
+        user?.id || 'admin'
+      );
+
+      success('Link Updated', 'Payment link updated live and synchronized.');
+      setEditingLink(null);
+      loadData();
+    } catch (err: any) {
+      error('Update Failed', err?.message || 'Failed to update payment link.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
 
   const loadData = async () => {
     setLinks(db.getPaymentLinks());
@@ -166,6 +240,11 @@ export const PaymentLinksPage: React.FC = () => {
       return;
     }
 
+    if (!upiEnabled && !bankEnabled) {
+      error('Select at least one mode', 'Please enable at least UPI or Bank Account transfer.');
+      return;
+    }
+
     try {
       const newLink = await db.createPaymentLink(
         clientId,
@@ -174,7 +253,12 @@ export const PaymentLinksPage: React.FC = () => {
         user?.full_name || 'Admin',
         user?.id || 'admin',
         redirectUrl.trim(),
-        selectedUpiId
+        selectedUpiId,
+        linkType,
+        {
+          upi_enabled: upiEnabled,
+          bank_enabled: bankEnabled,
+        }
       );
 
       setIsModalOpen(false);
@@ -403,6 +487,16 @@ export const PaymentLinksPage: React.FC = () => {
           <Button
             size="sm"
             variant="outline"
+            className="text-xs px-2 py-1 text-slate-700 hover:bg-slate-50"
+            onClick={() => openEditLink(item)}
+            title="Edit Payment Link"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
             className="text-xs px-2 py-1"
             onClick={() => handleCopyLink(item)}
             title="Copy Public Link"
@@ -562,11 +656,38 @@ export const PaymentLinksPage: React.FC = () => {
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title="Generate Dynamic Payment Link"
-        description="Creates an interactive payment link with UPI Intent (PhonePe/GPay/Paytm) and amount-encoded QR code."
+        title="Generate Payment Link"
         maxWidth="md"
       >
         <form onSubmit={handleCreateLink} className="space-y-4">
+          {/* PAYMENT MODES SELECTION */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <label className="block text-xs font-semibold text-slate-800">
+              Payment Modes:
+            </label>
+            <div className="flex items-center gap-4 text-xs">
+              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={upiEnabled}
+                  onChange={(e) => setUpiEnabled(e.target.checked)}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>UPI Payment (QR & Apps)</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={bankEnabled}
+                  onChange={(e) => setBankEnabled(e.target.checked)}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>Bank Account Transfer</span>
+              </label>
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
               Select Client <span className="text-rose-500">*</span>
@@ -586,14 +707,13 @@ export const PaymentLinksPage: React.FC = () => {
           </div>
 
           <Input
-            label="Payment Amount (₹) (Optional - खुला छोड़ सकते हैं)"
+            label="Payment Amount (₹)"
             type="number"
             min={0}
             step={1}
-            placeholder="Khali chhod sakte hain (e.g. 5000 ya blank)"
+            placeholder="Amount in ₹ (Leave empty for open amount)"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            helperText="Khali chhodne par customer checkout page par apni marzi se amount daal sakega."
             autoFocus
           />
 
@@ -626,13 +746,7 @@ export const PaymentLinksPage: React.FC = () => {
             placeholder="https://yourwebsite.com/thank-you"
             value={redirectUrl}
             onChange={(e) => setRedirectUrl(e.target.value)}
-            helperText="Client will be automatically redirected here after uploading screenshot"
           />
-
-          <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-900">
-            <span className="font-semibold block mb-0.5">UPI Deep Link Automation:</span>
-            When the client taps on PhonePe or GPay from their phone, this exact amount will be pre-filled automatically without manual typing.
-          </div>
 
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
             <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
@@ -648,8 +762,7 @@ export const PaymentLinksPage: React.FC = () => {
         <Modal
           isOpen={!!createdLink}
           onClose={() => setCreatedLink(null)}
-          title="Payment Link Ready!"
-          description="Your client can now make payment via UPI intent or scan the dynamic QR."
+          title="Payment Link Ready"
           maxWidth="md"
         >
           <div className="space-y-4">
@@ -920,6 +1033,137 @@ export const PaymentLinksPage: React.FC = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Edit Payment Link Modal */}
+      {editingLink && (
+        <Modal
+          isOpen={!!editingLink}
+          onClose={() => setEditingLink(null)}
+          title={`Edit Payment Link (${editingLink.id})`}
+          maxWidth="md"
+        >
+          <form onSubmit={handleSaveEdit} className="space-y-4">
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1">
+              <div>
+                <span className="text-slate-500">Client:</span>{' '}
+                <span className="font-semibold text-slate-800">{editingLink.client_name}</span>
+              </div>
+              <div>
+                <span className="text-slate-500">Created At:</span>{' '}
+                <span className="font-mono text-slate-700">{formatDate(editingLink.created_at)}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Payment Amount (₹)
+              </label>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                placeholder="Leave blank for open amount"
+                value={editAmount}
+                onChange={(e) => setEditAmount(e.target.value)}
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Enter an amount or leave blank to allow the customer to enter their own amount.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Remarks / Purpose
+              </label>
+              <Input
+                type="text"
+                placeholder="e.g. Service Fee"
+                value={editRemarks}
+                onChange={(e) => setEditRemarks(e.target.value)}
+              />
+            </div>
+
+            {/* Payment Modes */}
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <label className="block text-xs font-semibold text-slate-700">
+                Payment Modes
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 cursor-pointer hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={editUpiEnabled}
+                    onChange={(e) => setEditUpiEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  <div>
+                    <div className="text-xs font-medium text-slate-800">UPI Payment</div>
+                    <div className="text-[10px] text-slate-500">QR & Apps</div>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 cursor-pointer hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={editBankEnabled}
+                    onChange={(e) => setEditBankEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
+                  />
+                  <div>
+                    <div className="text-xs font-medium text-slate-800">Bank Transfer</div>
+                    <div className="text-[10px] text-slate-500">IMPS / NEFT</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* UPI Option */}
+            {editUpiEnabled && (
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <label className="block text-xs font-semibold text-slate-700">
+                  UPI ID (VPA)
+                </label>
+                {upis.length > 0 && (
+                  <select
+                    value={editSelectedUpiId}
+                    onChange={(e) => {
+                      setEditSelectedUpiId(e.target.value);
+                      if (e.target.value) setEditCustomUpiId('');
+                    }}
+                    className="w-full text-xs border border-slate-300 rounded-lg p-2 bg-white"
+                  >
+                    <option value="">Select Existing UPI</option>
+                    {upis.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.account_name} ({u.upi_id})
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <Input
+                  type="text"
+                  placeholder="Or enter custom UPI (e.g. name@okhdfcbank)"
+                  value={editCustomUpiId}
+                  onChange={(e) => {
+                    setEditCustomUpiId(e.target.value);
+                    if (e.target.value) setEditSelectedUpiId('');
+                  }}
+                />
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <Button type="button" variant="outline" size="sm" onClick={() => setEditingLink(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" isLoading={isSavingEdit}>
+                Save Changes
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 };

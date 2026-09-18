@@ -9,48 +9,82 @@ interface QRCodeDisplayProps {
   upiId: string;
   upiApp?: string;
   payeeName?: string;
+  accountHolder?: string;
   amount?: number;
   qrUrl?: string; // custom image url if uploaded
+  customImageUrl?: string; // alias
+  remarks?: string;
   size?: number;
   showActions?: boolean;
+  className?: string;
 }
 
 export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
   upiId,
   upiApp = 'UPI',
-  payeeName = 'Payment Portal',
+  payeeName,
+  accountHolder,
   amount,
   qrUrl,
+  customImageUrl,
+  remarks,
   size = 180,
   showActions = true,
+  className = '',
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [copied, setCopied] = useState(false);
+  const [imageError, setImageError] = useState(false);
   const { success, error } = useToast();
 
-  // Generate standard UPI payment URI: upi://pay?pa=...&pn=...
+  const effectiveQrImage = (!imageError && (qrUrl || customImageUrl)) ? (qrUrl || customImageUrl) : undefined;
+  const cleanUpiId = (upiId || '').trim();
+
+  // Generate standard UPI payment URI strictly conforming to NPCI specification:
+  // Note: pa (VPA) must retain the literal '@' character. Encoding to '%40' breaks scanner parsing in UPI apps.
   const upiUri = React.useMemo(() => {
-    let uri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(payeeName)}&cu=INR`;
+    if (!cleanUpiId) return '';
+
+    const effectivePayee = (payeeName || accountHolder || 'Payment Portal')
+      .replace(/[^a-zA-Z0-9 ]/g, ' ')
+      .trim()
+      .slice(0, 30) || 'Beneficiary';
+
+    let uri = `upi://pay?pa=${cleanUpiId}&pn=${encodeURIComponent(effectivePayee)}&cu=INR`;
+
     if (amount && amount > 0) {
-      uri += `&am=${amount}`;
+      uri += `&am=${Number(amount).toFixed(2)}`;
     }
+
+    if (remarks) {
+      const cleanRemarks = remarks.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().slice(0, 35);
+      if (cleanRemarks) {
+        uri += `&tn=${encodeURIComponent(cleanRemarks)}`;
+      }
+    }
+
     return uri;
-  }, [upiId, payeeName, amount]);
+  }, [cleanUpiId, payeeName, accountHolder, amount, remarks]);
 
   useEffect(() => {
-    if (qrUrl) {
-      // If user provided a custom image URL, we don't need to generate canvas
+    setImageError(false);
+  }, [qrUrl, customImageUrl]);
+
+  useEffect(() => {
+    if (effectiveQrImage) {
+      // If user provided a working custom image URL, canvas is skipped
       return;
     }
-    if (canvasRef.current) {
+    if (canvasRef.current && upiUri) {
       QRCode.toCanvas(
         canvasRef.current,
         upiUri,
         {
           width: size,
-          margin: 1.5,
+          margin: 2,
+          errorCorrectionLevel: 'M',
           color: {
-            dark: '#0f172a', // Slate-900
+            dark: '#000000',
             light: '#ffffff',
           },
         },
@@ -59,25 +93,23 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
         }
       );
     }
-  }, [upiUri, qrUrl, size]);
+  }, [upiUri, effectiveQrImage, size]);
 
   const handleDownload = () => {
     try {
-      if (qrUrl) {
-        // Download custom image
+      if (effectiveQrImage) {
         const link = document.createElement('a');
-        link.href = qrUrl;
-        link.download = `UPI-QR-${upiId.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
+        link.href = effectiveQrImage;
+        link.download = `UPI-QR-${cleanUpiId.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
         document.body.appendChild(link);
         link.click();
         link.remove();
         success('QR Code Downloaded', 'The QR image has been saved to your downloads.');
       } else if (canvasRef.current) {
-        // Export canvas as PNG
         const image = canvasRef.current.toDataURL('image/png');
         const link = document.createElement('a');
         link.href = image;
-        link.download = `UPI-QR-${upiId.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
+        link.download = `UPI-QR-${cleanUpiId.replace(/[^a-zA-Z0-9]/g, '_')}.png`;
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -89,10 +121,11 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
   };
 
   const handleCopyUPI = async () => {
-    const ok = await copyToClipboard(upiId);
+    if (!cleanUpiId) return;
+    const ok = await copyToClipboard(cleanUpiId);
     if (ok) {
       setCopied(true);
-      success('UPI ID Copied', `${upiId} copied to clipboard.`);
+      success('UPI ID Copied', `${cleanUpiId} copied to clipboard.`);
       setTimeout(() => setCopied(false), 2000);
     } else {
       error('Failed to copy', 'Please manually copy the UPI ID.');
@@ -100,12 +133,13 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
   };
 
   return (
-    <div className="flex flex-col items-center">
+    <div className={`flex flex-col items-center ${className}`}>
       <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-xs inline-block">
-        {qrUrl ? (
+        {effectiveQrImage ? (
           <img
-            src={qrUrl}
-            alt={`UPI QR for ${upiId}`}
+            src={effectiveQrImage}
+            alt={`UPI QR for ${cleanUpiId}`}
+            onError={() => setImageError(true)}
             className="rounded-lg object-contain"
             style={{ width: size, height: size }}
           />
@@ -114,8 +148,10 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({
         )}
       </div>
 
-      <div className="mt-2.5 text-center">
-        <span className="text-xs font-semibold text-slate-800 tracking-wide block">{upiId}</span>
+      <div className="mt-2.5 text-center max-w-full px-2">
+        <span className="text-xs font-semibold text-slate-800 tracking-wide font-mono block break-all select-all">
+          {cleanUpiId || 'No UPI Configured'}
+        </span>
         <span className="text-[11px] text-slate-500 font-medium">{upiApp}</span>
       </div>
 

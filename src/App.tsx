@@ -12,6 +12,7 @@ import { PaymentCheckoutPage } from './pages/public/PaymentCheckoutPage';
 
 // Admin Pages
 import { AdminDashboard } from './pages/admin/AdminDashboard';
+import { BankAndUpiPage } from './pages/admin/BankAndUpiPage';
 import { BankAccountsPage } from './pages/admin/BankAccountsPage';
 import { UpiAccountsPage } from './pages/admin/UpiAccountsPage';
 import { ClientsPage } from './pages/admin/ClientsPage';
@@ -22,8 +23,10 @@ import { SettingsPage } from './pages/admin/SettingsPage';
 
 // Client Pages
 import { ClientDashboard } from './pages/client/ClientDashboard';
+import { ClientManageLinksPage } from './pages/client/ClientManageLinksPage';
 import { ClientHistoryPage } from './pages/client/ClientHistoryPage';
 import { ClientSupportPage } from './pages/client/ClientSupportPage';
+import { PreviewSwitcher } from './components/PreviewSwitcher';
 
 // Protected Route for Admins
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -116,8 +119,9 @@ export default function App() {
             >
               <Route index element={<Navigate to="/admin/dashboard" replace />} />
               <Route path="dashboard" element={<AdminDashboard />} />
-              <Route path="banks" element={<BankAccountsPage />} />
-              <Route path="upis" element={<UpiAccountsPage />} />
+              <Route path="banks-upi" element={<BankAndUpiPage />} />
+              <Route path="banks" element={<BankAndUpiPage defaultTab="banks" />} />
+              <Route path="upis" element={<BankAndUpiPage defaultTab="upis" />} />
               <Route path="clients" element={<ClientsPage />} />
               <Route path="payment-links" element={<PaymentLinksPage />} />
               <Route path="transactions" element={<TransactionsPage />} />
@@ -136,6 +140,7 @@ export default function App() {
             >
               <Route index element={<Navigate to="/client/dashboard" replace />} />
               <Route path="dashboard" element={<ClientDashboard />} />
+              <Route path="manage-links" element={<ClientManageLinksPage />} />
               <Route path="history" element={<ClientHistoryPage />} />
               <Route path="support" element={<ClientSupportPage />} />
             </Route>
@@ -144,6 +149,7 @@ export default function App() {
             <Route path="/" element={<RootRedirect />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          <PreviewSwitcher />
         </BrowserRouter>
       </ToastProvider>
     </AuthProvider>
